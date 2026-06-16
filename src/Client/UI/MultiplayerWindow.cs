@@ -1,6 +1,6 @@
-using System.Collections.Generic;
+using System;
+using NeoModLoader.General;              // WindowCreator
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using WorldboxMP.Client.Net;
 using WorldboxMP.Shared.Protocol;
@@ -8,17 +8,26 @@ using WorldboxMP.Shared.Protocol;
 namespace WorldboxMP.Client.UI
 {
     /// <summary>
-    /// The multiplayer manager window. Built entirely from code on its own overlay
-    /// canvas. Three modes (login / lobby / in-room) are pre-built once so text
-    /// inputs keep their content; only dynamic labels and lists refresh on events.
+    /// The multiplayer manager window. Hosted inside WorldBox's own window frame
+    /// (cloned via NML's WindowCreator) so it matches the native look — ornate
+    /// frame, title bar, close button, scroll area — with our sections built into
+    /// its content area. Falls back to a self-drawn panel if the native frame
+    /// can't be created. Sections (login / lobby / room / settings) are built once
+    /// so inputs keep their content; only labels and lists refresh on events.
     /// </summary>
     public class MultiplayerWindow : MonoBehaviour
     {
+        public const string WindowId = "wbmp_main";
         public static MultiplayerWindow Instance { get; private set; }
 
         private NetClient Net => NetClient.Instance;
 
-        private GameObject _root;
+        private bool _built;
+        private bool _native;
+        private ScrollWindow _window;       // native frame (when _native)
+        private GameObject _root;           // fallback panel root (when !_native)
+        private Transform _host;            // where sections live (native content or fallback root)
+
         private Text _statusText, _msgText;
         private GameObject _loginPanel, _lobbyPanel, _roomPanel, _settingsPanel;
         private InputField _userField, _passField;
@@ -34,16 +43,82 @@ namespace WorldboxMP.Client.UI
             var go = new GameObject("WBMP_Window");
             DontDestroyOnLoad(go);
             Instance = go.AddComponent<MultiplayerWindow>();
-            Instance.Build();
-            Instance.Hide();
+            // Built lazily on first Show (needs the in-game UI / CanvasMain to exist).
         }
 
-        public void Toggle() { if (_root.activeSelf) Hide(); else Show(); }
-        public void Show() { _root.SetActive(true); Refresh(); if (Net.LoggedIn) Net.RequestRoomList(); }
-        public void Hide() { _root.SetActive(false); }
+        public void Toggle()
+        {
+            EnsureBuilt();
+            if (_native) { if (ScrollWindow.isCurrentWindow(WindowId)) Hide(); else Show(); }
+            else { if (_root != null && _root.activeSelf) Hide(); else Show(); }
+        }
 
-        // ── Build (once) ────────────────────────────────────────────────────
-        private void Build()
+        public void Show()
+        {
+            EnsureBuilt();
+            if (_native) ScrollWindow.showWindow(WindowId);
+            else _root?.SetActive(true);
+            Refresh();
+            if (Net.LoggedIn) Net.RequestRoomList();
+        }
+
+        public void Hide()
+        {
+            if (_native) { try { _window?.clickHide("right"); } catch { } }
+            else _root?.SetActive(false);
+        }
+
+        public void ShowSettings() { _showSettings = true; Show(); }
+
+        // ── Build (lazy, once) ───────────────────────────────────────────────
+        private void EnsureBuilt()
+        {
+            if (_built) return;
+            _built = true;
+            try
+            {
+                BuildNative();
+                _native = true;
+                ModLog.Info("Manager window built (native frame).");
+            }
+            catch (Exception e)
+            {
+                ModLog.Warn("Native window unavailable, using fallback panel: " + e.Message);
+                BuildFallback();
+                _native = false;
+            }
+            BuildSections();
+            WireNet();
+        }
+
+        private void BuildNative()
+        {
+            _window = WindowCreator.CreateEmptyWindow(WindowId, "WorldBox Multiplayer");
+            if (_window == null) throw new Exception("CreateEmptyWindow returned null");
+            _host = FindContent(_window);
+            if (_host == null) throw new Exception("window content not found");
+
+            // Give the content a vertical layout that grows with its children.
+            var vlg = _host.gameObject.GetComponent<VerticalLayoutGroup>() ?? _host.gameObject.AddComponent<VerticalLayoutGroup>();
+            vlg.spacing = 6;
+            vlg.padding = new RectOffset(6, 6, 6, 6);
+            vlg.childControlWidth = true; vlg.childForceExpandWidth = true;
+            vlg.childControlHeight = true; vlg.childForceExpandHeight = false;
+            vlg.childAlignment = TextAnchor.UpperCenter;
+            var fit = _host.gameObject.GetComponent<ContentSizeFitter>() ?? _host.gameObject.AddComponent<ContentSizeFitter>();
+            fit.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        }
+
+        private static Transform FindContent(ScrollWindow w)
+        {
+            var t = w.transform.Find("Background/Scroll View/Viewport/Content");
+            if (t != null) return t;
+            var sr = w.GetComponentInChildren<ScrollRect>();
+            return sr != null ? sr.content : null;
+        }
+
+        // Self-drawn panel used only if the native frame can't be created.
+        private void BuildFallback()
         {
             var canvasGo = new GameObject("WBMP_Canvas");
             canvasGo.transform.SetParent(transform, false);
@@ -55,47 +130,40 @@ namespace WorldboxMP.Client.UI
             scaler.referenceResolution = new Vector2(1920, 1080);
             canvasGo.AddComponent<GraphicRaycaster>();
 
-            // Root window panel
             var rootImg = UiKit.MakePanel("Root", canvasGo.transform, UiKit.PanelBg);
             _root = rootImg.gameObject;
             var rt = rootImg.rectTransform;
             rt.sizeDelta = new Vector2(380, 560);
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
             rt.anchoredPosition = Vector2.zero;
-            var rootCol = _root.AddComponent<VerticalLayoutGroup>();
-            rootCol.spacing = 6; rootCol.padding = new RectOffset(0, 0, 0, 10);
-            rootCol.childControlWidth = true; rootCol.childControlHeight = true;
-            rootCol.childForceExpandWidth = true; rootCol.childForceExpandHeight = false;
+            var col = _root.AddComponent<VerticalLayoutGroup>();
+            col.spacing = 6; col.padding = new RectOffset(8, 8, 8, 10);
+            col.childControlWidth = true; col.childForceExpandWidth = true;
+            col.childControlHeight = true; col.childForceExpandHeight = false;
+            UiKit.MakeButton("Close", _root.transform, "Close", Hide, UiKit.ButtonRed, 13);
+            _host = _root.transform;
+        }
 
-            // Header (draggable) + close
-            var header = UiKit.MakePanel("Header", _root.transform, UiKit.SectionBg);
-            UiKit.SetHeight(header.gameObject, 34f);
-            header.gameObject.AddComponent<PanelDragger>().Target = rt;
-            var hrow = UiKit.MakeRow("HeaderRow", header.transform, 4f);
-            var hrt = ((RectTransform)hrow.transform);
-            hrt.anchorMin = Vector2.zero; hrt.anchorMax = Vector2.one;
-            UiKit.MakeText("Title", hrow.transform, "WorldBox Multiplayer", 15, TextAnchor.MiddleLeft, FontStyle.Bold);
-            var gear = UiKit.MakeButton("Gear", hrow.transform, "⚙", () => { _showSettings = !_showSettings; Refresh(); }, UiKit.ButtonGrey, 14);
+        private void BuildSections()
+        {
+            // Header: status + a settings toggle.
+            var hdr = UiKit.MakeRow("Hdr", _host, 4f);
+            _statusText = UiKit.MakeText("Status", hdr.transform, "", 12, TextAnchor.MiddleLeft);
+            var gear = UiKit.MakeButton("Gear", hdr.transform, "⚙", () => { _showSettings = !_showSettings; Refresh(); }, UiKit.ButtonGrey, 13);
             UiKit.SetHeight(gear.gameObject, 26f); gear.GetComponent<LayoutElement>().preferredWidth = 34;
-            var close = UiKit.MakeButton("Close", hrow.transform, "X", Hide, UiKit.ButtonRed, 14);
-            UiKit.SetHeight(close.gameObject, 26f);
-            close.GetComponent<LayoutElement>().preferredWidth = 30;
 
-            _statusText = UiKit.MakeText("Status", _root.transform, "", 12, TextAnchor.MiddleCenter);
-            UiKit.SetHeight(_statusText.gameObject, 18f);
-            _msgText = UiKit.MakeText("Msg", _root.transform, "", 12, TextAnchor.MiddleCenter, FontStyle.Italic);
+            _msgText = UiKit.MakeText("Msg", _host, "", 12, TextAnchor.MiddleCenter, FontStyle.Italic);
             UiKit.SetHeight(_msgText.gameObject, 18f);
 
             BuildLoginPanel();
             BuildLobbyPanel();
             BuildRoomPanel();
             BuildSettingsPanel();
-            WireNet();
         }
 
         private void BuildLoginPanel()
         {
-            _loginPanel = UiKit.MakeColumn("Login", _root.transform, UiKit.SectionBg);
+            _loginPanel = UiKit.MakeColumn("Login", _host, null);
             UiKit.MakeText("h", _loginPanel.transform, "Account", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
             _userField = UiKit.MakeInput("User", _loginPanel.transform, "Username", false, 24);
             _passField = UiKit.MakeInput("Pass", _loginPanel.transform, "Password", true, 64);
@@ -110,7 +178,7 @@ namespace WorldboxMP.Client.UI
 
         private void BuildLobbyPanel()
         {
-            _lobbyPanel = UiKit.MakeColumn("Lobby", _root.transform, UiKit.SectionBg);
+            _lobbyPanel = UiKit.MakeColumn("Lobby", _host, null);
 
             UiKit.MakeText("ch", _lobbyPanel.transform, "Create a room", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
             _roomNameField = UiKit.MakeInput("RName", _lobbyPanel.transform, "Room name", false, 40);
@@ -141,7 +209,7 @@ namespace WorldboxMP.Client.UI
 
         private void BuildRoomPanel()
         {
-            _roomPanel = UiKit.MakeColumn("RoomP", _root.transform, UiKit.SectionBg);
+            _roomPanel = UiKit.MakeColumn("RoomP", _host, null);
             var brow = UiKit.MakeRow("RTopRow", _roomPanel.transform);
             UiKit.MakeButton("Logs", brow.transform, "Server Logs", () => Net.RequestLogs(), UiKit.ButtonGrey);
             UiKit.MakeButton("Leave", brow.transform, "Leave Room", () => Net.LeaveRoom(), UiKit.ButtonRed);
@@ -153,7 +221,7 @@ namespace WorldboxMP.Client.UI
 
         private void BuildSettingsPanel()
         {
-            _settingsPanel = UiKit.MakeColumn("Settings", _root.transform, UiKit.SectionBg);
+            _settingsPanel = UiKit.MakeColumn("Settings", _host, null);
             UiKit.MakeText("sh", _settingsPanel.transform, "Server", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
             _hostField = UiKit.MakeInput("Host", _settingsPanel.transform, "Host (e.g. 127.0.0.1)", false, 64);
             _portField = UiKit.MakeInput("Port", _settingsPanel.transform, "Port", false, 6);
@@ -174,9 +242,6 @@ namespace WorldboxMP.Client.UI
                 11, TextAnchor.MiddleLeft, FontStyle.Italic);
         }
 
-        /// <summary>Open the window directly to the server settings (used by the tab button).</summary>
-        public void ShowSettings() { _showSettings = true; Show(); }
-
         // ── Net events ──────────────────────────────────────────────────────
         private void WireNet()
         {
@@ -194,13 +259,12 @@ namespace WorldboxMP.Client.UI
         // ── Refresh ─────────────────────────────────────────────────────────
         private void Refresh()
         {
-            if (_root == null) return;
+            if (!_built || _statusText == null) return;
             string conn = Net.State == ConnState.Connected ? "Connected" :
                           Net.State == ConnState.Connecting ? "Connecting..." : "Disconnected";
             string who = Net.LoggedIn ? $" | {Net.Username}" : "";
             _statusText.text = $"{conn}{who}";
 
-            // Settings overrides everything when open.
             if (_settingsPanel != null && _showSettings)
             {
                 _loginPanel.SetActive(false); _lobbyPanel.SetActive(false); _roomPanel.SetActive(false);
@@ -211,10 +275,6 @@ namespace WorldboxMP.Client.UI
 
             bool loggedIn = Net.LoggedIn;
             bool inRoom = Net.InRoom;
-
-            // Panels are visible by session state (not connection) so the UI is
-            // always visible; the status line shows whether we're connected, and
-            // the action buttons simply no-op until the connection is up.
             _loginPanel.SetActive(!loggedIn);
             _lobbyPanel.SetActive(loggedIn && !inRoom);
             _roomPanel.SetActive(loggedIn && inRoom);
@@ -224,6 +284,7 @@ namespace WorldboxMP.Client.UI
 
         private void RefreshRoomList()
         {
+            if (_roomListContainer == null) return;
             ClearChildren(_roomListContainer);
             if (Net.RoomList.Count == 0)
                 UiKit.MakeText("empty", _roomListContainer.transform, "(no public rooms)", 11, TextAnchor.MiddleLeft, FontStyle.Italic);
@@ -245,7 +306,6 @@ namespace WorldboxMP.Client.UI
                 string tag = ((RoomRole)p.Role) == RoomRole.King ? " \U0001F451" : ((RoomRole)p.Role) == RoomRole.Admin ? " ★" : "";
                 bool isMe = p.Id4 == Net.Id4;
                 UiKit.MakeText("n", row.transform, p.Username + tag + (isMe ? " (you)" : ""), 12);
-                // Moderation buttons for admins/king, on others.
                 if (Net.IsAdmin && !isMe)
                 {
                     UiKit.MakeButton("kick", row.transform, "Kick", () => Net.Kick(p.Id4), UiKit.ButtonRed, 11)
@@ -268,7 +328,7 @@ namespace WorldboxMP.Client.UI
             for (int i = start; i < Net.Logs.Count; i++)
             {
                 var e = Net.Logs[i];
-                var time = System.DateTimeOffset.FromUnixTimeMilliseconds(e.UnixMs).LocalDateTime.ToString("HH:mm:ss");
+                var time = DateTimeOffset.FromUnixTimeMilliseconds(e.UnixMs).LocalDateTime.ToString("HH:mm:ss");
                 UiKit.MakeText("log" + i, _logContainer.transform, $"{time}  {e.Text}", 10, TextAnchor.MiddleLeft);
             }
         }
@@ -278,27 +338,6 @@ namespace WorldboxMP.Client.UI
             if (go == null) return;
             for (int i = go.transform.childCount - 1; i >= 0; i--)
                 Destroy(go.transform.GetChild(i).gameObject);
-        }
-    }
-
-    /// <summary>Drag a target RectTransform by its header.</summary>
-    public class PanelDragger : MonoBehaviour, IBeginDragHandler, IDragHandler
-    {
-        public RectTransform Target;
-        private Vector2 _offset;
-        public void OnBeginDrag(PointerEventData e)
-        {
-            if (Target == null) return;
-            RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                (RectTransform)Target.parent, e.position, e.pressEventCamera, out var local);
-            _offset = Target.anchoredPosition - local;
-        }
-        public void OnDrag(PointerEventData e)
-        {
-            if (Target == null) return;
-            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                (RectTransform)Target.parent, e.position, e.pressEventCamera, out var local))
-                Target.anchoredPosition = local + _offset;
         }
     }
 }
