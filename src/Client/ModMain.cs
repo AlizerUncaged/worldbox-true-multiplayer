@@ -1,5 +1,3 @@
-using System.IO;
-using System.Reflection;
 using HarmonyLib;
 using NeoModLoader.api;
 using WorldboxMP.Client.Net;
@@ -22,8 +20,11 @@ namespace WorldboxMP.Client
         {
             ModLog.Info($"Loading WorldBox Multiplayer v{GetDeclaration().Version}...");
 
-            // Where this dll lives — used to find optional icon PNGs.
-            IconFactory.ModFolder = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            // The mod's folder on disk (used to find optional icon PNGs). NML loads
+            // compiled mods from memory, so Assembly.Location is empty — use the
+            // ModDeclare folder instead.
+            try { IconFactory.ModFolder = GetDeclaration()?.FolderPath; }
+            catch { IconFactory.ModFolder = null; }
 
             // Harmony (mirroring patches register here as the feature lands).
             new Harmony("alizer.worldboxmp").PatchAll(GetType().Assembly);

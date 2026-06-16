@@ -169,13 +169,15 @@ namespace WorldboxMP.Client.UI
             string who = Net.LoggedIn ? $" | {Net.Username}" : "";
             _statusText.text = $"{conn}{who}";
 
-            bool connected = Net.State == ConnState.Connected;
             bool loggedIn = Net.LoggedIn;
             bool inRoom = Net.InRoom;
 
-            _loginPanel.SetActive(connected && !loggedIn);
-            _lobbyPanel.SetActive(connected && loggedIn && !inRoom);
-            _roomPanel.SetActive(connected && loggedIn && inRoom);
+            // Panels are visible by session state (not connection) so the UI is
+            // always visible; the status line shows whether we're connected, and
+            // the action buttons simply no-op until the connection is up.
+            _loginPanel.SetActive(!loggedIn);
+            _lobbyPanel.SetActive(loggedIn && !inRoom);
+            _roomPanel.SetActive(loggedIn && inRoom);
 
             if (inRoom) RefreshRoster();
         }
