@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>WorldboxMP.Client</AssemblyName>
+    <RootNamespace>WorldboxMP.Client</RootNamespace>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Copy NuGet deps (LiteNetLib) + the Shared dll into output for deployment. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+    <!-- WorldBox install root: Projects/Worldbox-Multiplayer/src/Client -> up 4. -->
+    <GameDir>$(MSBuildProjectDirectory)\..\..\..\..</GameDir>
+    <ManagedDir>$(GameDir)\worldbox_Data\Managed</ManagedDir>
+    <ModsDir>$(GameDir)\worldbox_Data\StreamingAssets\mods</ModsDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="mscorlib" />
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+
+  <!-- Game / modloader assemblies (compile-only; not copied) -->
+  <ItemGroup>
+    <Reference Include="NeoModLoader">
+      <HintPath>$(ModsDir)\NeoModLoader.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(ModsDir)\NML\Assemblies\0Harmony.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ModsDir)\NML\Assembly-CSharp-Publicized.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Networking + shared protocol (these DO get copied to output for deployment) -->
+  <ItemGroup>
+    <PackageReference Include="LiteNetLib" Version="1.3.1" />
+    <ProjectReference Include="..\Shared\WorldboxMP.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="mod.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

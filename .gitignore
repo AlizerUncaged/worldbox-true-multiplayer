@@ -1,0 +1,22 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# NuGet
+*.nupkg
+packages/
+
+# Local secrets / config overrides
+appsettings.Local.json
+*.local.json
+
+# OS
+Thumbs.db
+.DS_Store
