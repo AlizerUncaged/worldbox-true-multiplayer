@@ -44,14 +44,29 @@ The client references the local WorldBox/NML assemblies via relative paths
 
 ## Run the server
 
+The server is a **framework-dependent** .NET 8 app (needs the .NET 8 runtime
+installed). Publish it (cross-platform — runs on Windows and Ubuntu):
+
 ```bash
-dotnet run --project src/Server/WorldboxMP.Server.csproj
-# or run the built exe; override config via env:
-#   WBMP_MONGO=<connection string>   WBMP_PORT=40441
+dotnet publish src/Server/WorldboxMP.Server.csproj -c Release -o <out-dir>
 ```
 
-It connects to MongoDB, ensures the permanent room **`0000`** ("Lobby"), and
-listens on UDP `40441`.
+Then run it:
+
+```bash
+# Windows (apphost exe, has the app icon):
+WorldboxMP.Server.exe
+# Any OS (Windows / Ubuntu) via the portable dll:
+dotnet WorldboxMP.Server.dll
+# Dev run:
+dotnet run --project src/Server/WorldboxMP.Server.csproj
+```
+
+Override config via env vars: `WBMP_MONGO=<connection string>`, `WBMP_PORT=40441`.
+
+It connects to MongoDB, ensures the permanent room **`0000`** ("Lobby"), listens
+on UDP `40441`, and prints colored, verbose logs (joins, god powers, spawns, sim
+changes — each with the acting username).
 
 ## Deploy the client mod
 

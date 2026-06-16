@@ -1,16 +1,17 @@
 using System.Collections.Generic;
 using LiteNetLib.Utils;
 
-namespace WorldboxMP.Client.Mirror
+namespace WorldboxMP.Shared.Protocol
 {
-    // Plain payload structs carried inside MirrorMessage.Payload.
+    // Payload structs carried inside MirrorMessage.Payload. Shared so the server
+    // can decode them for verbose logging and the client for apply.
 
     public struct GodPowerMsg { public string PowerId; public int X; public int Y; }
     public struct SpawnMsg { public long KingId; public string AssetId; public int X; public int Y; public float Height; }
     public struct EntityPos { public long KingId; public float X; public float Y; public float H; }
     public struct SimControlMsg { public bool Paused; public string SpeedId; }
 
-    /// <summary>Encodes/decodes the kind-specific payloads of a MirrorMessage.</summary>
+    /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
     {
         public static byte[] Write(GodPowerMsg m)

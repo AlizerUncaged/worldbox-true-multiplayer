@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using LiteNetLib;
 using LiteNetLib.Utils;
+using Pastel;
 using WorldboxMP.Server.Auth;
 using WorldboxMP.Server.Data;
 using WorldboxMP.Server.Rooms;
@@ -75,7 +77,8 @@ namespace WorldboxMP.Server.Net
                 {
                     _rooms.LeaveRoom(session);
                     _sessions.Remove(peer);
-                    Log($"Peer disconnected: {session.Username} ({info.Reason}).");
+                    LogC($"Peer disconnected: {session.Username} ({info.Reason}).",
+                         $"{Dim("disconnect")} {Usr(string.IsNullOrEmpty(session.Username) ? "(anon)" : session.Username)} {Dim("(" + info.Reason + ")")}");
                 }
             };
 
@@ -115,7 +118,7 @@ namespace WorldboxMP.Server.Net
         {
             var s = SessionOf(peer); if (s == null) return;
             var res = _auth.Register(req.Username, req.Password);
-            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; Log($"Registered: {s.Username} (id4 {s.Id4})."); }
+            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; LogC($"Registered: {s.Username} (id4 {s.Id4}).", $"{Ok("registered")} {Usr(s.Username)} {Dim("id4 " + s.Id4)}"); }
             peer.Send(_proc, MakeAuth(res));
         }
 
@@ -123,7 +126,7 @@ namespace WorldboxMP.Server.Net
         {
             var s = SessionOf(peer); if (s == null) return;
             var res = _auth.Login(req.Username, req.Password);
-            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; Log($"Login: {s.Username}."); }
+            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; LogC($"Login: {s.Username}.", $"{Ok("login")} {Usr(s.Username)}"); }
             peer.Send(_proc, MakeAuth(res));
         }
 
@@ -198,6 +201,8 @@ namespace WorldboxMP.Server.Net
             var room = s.CurrentRoom;
             msg.SenderId4 = s.Id4;
 
+            LogMirror(s, msg);
+
             // King-authoritative routing:
             //  - From the king  → authoritative event, fan out to everyone else.
             //  - From a player   → an intent, forward only to the king to execute.
@@ -209,6 +214,31 @@ namespace WorldboxMP.Server.Net
             {
                 var king = room.GetKing();
                 king?.Session.Peer.Send(_proc, msg);
+            }
+        }
+
+        // Verbose, human-readable logging of mirrored gameplay (EntityState is skipped — 10 Hz spam).
+        private void LogMirror(Session s, MirrorMessage msg)
+        {
+            string room = s.CurrentRoom.ShareableId;
+            switch ((MirrorKind)msg.Kind)
+            {
+                case MirrorKind.GodPower:
+                    var gp = MirrorCodec.ReadGodPower(msg.Payload);
+                    LogC($"[{room}] {s.Username} used power '{gp.PowerId}' at ({gp.X},{gp.Y})",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("used power")} {Val(gp.PowerId)} {Dim($"at ({gp.X},{gp.Y})")}");
+                    break;
+                case MirrorKind.SpawnUnit:
+                    var sp = MirrorCodec.ReadSpawn(msg.Payload);
+                    LogC($"[{room}] {s.Username} spawned '{sp.AssetId}' at ({sp.X},{sp.Y}) #{sp.KingId}",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("spawned")} {Val(sp.AssetId)} {Dim($"at ({sp.X},{sp.Y}) #{sp.KingId}")}");
+                    break;
+                case MirrorKind.SimControl:
+                    var sc = MirrorCodec.ReadSimControl(msg.Payload);
+                    LogC($"[{room}] {s.Username} sim paused={sc.Paused} speed={sc.SpeedId}",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("sim")} paused={Val(sc.Paused.ToString())} speed={Val(sc.SpeedId)}");
+                    break;
+                // EntityState: intentionally not logged (high frequency).
             }
         }
 
@@ -226,12 +256,26 @@ namespace WorldboxMP.Server.Net
         }
 
         // ── Logging ─────────────────────────────────────────────────────────
-        private void Log(string text)
+        // Color helpers (console only). The ring buffer / clients always get plain text.
+        internal static string Usr(string s) => s.Pastel(Color.Cyan);
+        internal static string Act(string s) => s.Pastel(Color.Gold);
+        internal static string Val(string s) => s.Pastel(Color.MediumPurple);
+        internal static string Dim(string s) => s.Pastel(Color.Gray);
+        internal static string Ok(string s) => s.Pastel(Color.LightGreen);
+        internal static string Bad(string s) => s.Pastel(Color.IndianRed);
+
+        /// <summary>Log plain text (console shows it uncolored).</summary>
+        private void Log(string text) => Emit(text, text);
+
+        /// <summary>Log with a separate colored console rendering (clients still get the plain text).</summary>
+        private void LogC(string plain, string colored) => Emit(plain, colored);
+
+        private void Emit(string plain, string colored)
         {
-            var entry = new LogEntry { UnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Text = text };
+            var entry = new LogEntry { UnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Text = plain };
             _log.AddLast(entry);
             while (_log.Count > MaxLog) _log.RemoveFirst();
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {text}");
+            Console.WriteLine($"{$"[{DateTime.Now:HH:mm:ss}]".Pastel(Color.DimGray)} {colored}");
         }
     }
 }
