@@ -1,3 +1,5 @@
+using System.Reflection;
+using HarmonyLib;                    // AccessTools
 using NeoModLoader.General;          // PowerButtonCreator
 using NeoModLoader.General.UI.Tab;   // TabManager
 using UnityEngine;
@@ -13,11 +15,16 @@ namespace WorldboxMP.Client.UI
         public const string TabId = "wbmp_tab";
         private static bool _created;
 
+        // PowerTabController.instance is internal at runtime (the publicized DLL
+        // lies), so read it via reflection rather than touching it directly.
+        private static readonly FieldInfo _ptcInstance =
+            AccessTools.Field(typeof(PowerTabController), "instance");
+
         public static bool TryCreate()
         {
             if (_created) return true;
             // The tab system needs the base tabs to exist (only true in-game).
-            if (PowerTabController.instance == null) return false;
+            if (_ptcInstance == null || _ptcInstance.GetValue(null) == null) return false;
 
             try
             {
