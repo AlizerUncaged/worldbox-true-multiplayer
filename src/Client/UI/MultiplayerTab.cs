@@ -28,7 +28,9 @@ namespace WorldboxMP.Client.UI
 
             try
             {
-                var tabIcon = IconFactory.Get("mp_tab", new Color(0.30f, 0.55f, 0.95f));
+                // Embedded 16:9 logo, letterboxed to a square so it fits the tab slot.
+                var tabIcon = IconFactory.GetEmbedded("multiplayer-header-icon.png")
+                              ?? IconFactory.Get("mp_tab", new Color(0.30f, 0.55f, 0.95f));
                 var tab = TabManager.CreateTab(TabId, "Multiplayer", "WorldBox Multiplayer", tabIcon);
 
                 AddButton("wbmp_open", "Open the multiplayer manager",

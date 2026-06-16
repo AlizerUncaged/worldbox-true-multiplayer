@@ -70,4 +70,12 @@
     <None Include="mod.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Icons baked into the dll so the mod is self-contained. Explicit LogicalName
+       so we can fetch them by a stable name regardless of MSBuild mangling. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\multiplayer-header-icon.png">
+      <LogicalName>multiplayer-header-icon.png</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>
