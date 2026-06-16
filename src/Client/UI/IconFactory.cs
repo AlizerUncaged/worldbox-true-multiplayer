@@ -52,12 +52,35 @@ namespace WorldboxMP.Client.UI
                         stream.CopyTo(ms);
                         var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
                         tex.LoadImage(ms.ToArray());
+                        tex = TrimTransparent(tex);                       // remove empty margins so the art fills
                         if (padToSquare && tex.width != tex.height) tex = PadToSquare(tex);
                         return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
                     }
                 }
             }
             catch (Exception e) { ModLog.Warn("Embedded icon load failed (" + name + "): " + e.Message); return null; }
+        }
+
+        /// <summary>Crop fully/near-transparent borders down to the art's bounding box.</summary>
+        private static Texture2D TrimTransparent(Texture2D src, byte alphaThreshold = 8)
+        {
+            int w = src.width, h = src.height;
+            var px = src.GetPixels32();
+            int minX = w, minY = h, maxX = -1, maxY = -1;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    if (px[y * w + x].a > alphaThreshold)
+                    {
+                        if (x < minX) minX = x; if (x > maxX) maxX = x;
+                        if (y < minY) minY = y; if (y > maxY) maxY = y;
+                    }
+            if (maxX < minX) return src;                    // fully transparent — leave as-is
+            int cw = maxX - minX + 1, ch = maxY - minY + 1;
+            if (cw == w && ch == h) return src;             // nothing to trim
+            var dst = new Texture2D(cw, ch, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+            dst.SetPixels(src.GetPixels(minX, minY, cw, ch));
+            dst.Apply();
+            return dst;
         }
 
         private static Texture2D PadToSquare(Texture2D src)
