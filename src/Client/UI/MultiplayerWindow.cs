@@ -20,11 +20,13 @@ namespace WorldboxMP.Client.UI
 
         private GameObject _root;
         private Text _statusText, _msgText;
-        private GameObject _loginPanel, _lobbyPanel, _roomPanel;
+        private GameObject _loginPanel, _lobbyPanel, _roomPanel, _settingsPanel;
         private InputField _userField, _passField;
         private InputField _roomNameField, _roomPassField, _joinIdField, _joinPassField;
+        private InputField _hostField, _portField;
         private Toggle _unlistedToggle;
         private GameObject _roomListContainer, _rosterContainer, _logContainer;
+        private bool _showSettings;
 
         public static void Ensure()
         {
@@ -73,6 +75,8 @@ namespace WorldboxMP.Client.UI
             var hrt = ((RectTransform)hrow.transform);
             hrt.anchorMin = Vector2.zero; hrt.anchorMax = Vector2.one;
             UiKit.MakeText("Title", hrow.transform, "WorldBox Multiplayer", 15, TextAnchor.MiddleLeft, FontStyle.Bold);
+            var gear = UiKit.MakeButton("Gear", hrow.transform, "⚙", () => { _showSettings = !_showSettings; Refresh(); }, UiKit.ButtonGrey, 14);
+            UiKit.SetHeight(gear.gameObject, 26f); gear.GetComponent<LayoutElement>().preferredWidth = 34;
             var close = UiKit.MakeButton("Close", hrow.transform, "X", Hide, UiKit.ButtonRed, 14);
             UiKit.SetHeight(close.gameObject, 26f);
             close.GetComponent<LayoutElement>().preferredWidth = 30;
@@ -85,6 +89,7 @@ namespace WorldboxMP.Client.UI
             BuildLoginPanel();
             BuildLobbyPanel();
             BuildRoomPanel();
+            BuildSettingsPanel();
             WireNet();
         }
 
@@ -146,6 +151,32 @@ namespace WorldboxMP.Client.UI
             _logContainer = UiKit.MakeColumn("LogList", _roomPanel.transform, null, 1f, new RectOffset(0, 0, 0, 0));
         }
 
+        private void BuildSettingsPanel()
+        {
+            _settingsPanel = UiKit.MakeColumn("Settings", _root.transform, UiKit.SectionBg);
+            UiKit.MakeText("sh", _settingsPanel.transform, "Server", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
+            _hostField = UiKit.MakeInput("Host", _settingsPanel.transform, "Host (e.g. 127.0.0.1)", false, 64);
+            _portField = UiKit.MakeInput("Port", _settingsPanel.transform, "Port", false, 6);
+            _portField.contentType = InputField.ContentType.IntegerNumber;
+            _hostField.text = ServerConfig.Host;
+            _portField.text = ServerConfig.Port.ToString();
+            UiKit.MakeButton("SaveServer", _settingsPanel.transform, "Save & Reconnect", () =>
+            {
+                string host = string.IsNullOrWhiteSpace(_hostField.text) ? "127.0.0.1" : _hostField.text.Trim();
+                int port = int.TryParse(_portField.text, out var p) ? p : NetProtocol.DefaultPort;
+                ServerConfig.Host = host; ServerConfig.Port = port;
+                Net.Reconnect(host, port);
+                _showSettings = false;
+                Msg($"Reconnecting to {host}:{port}...");
+                Refresh();
+            }, UiKit.ButtonRed);
+            UiKit.MakeText("shint", _settingsPanel.transform, "Default port is 40441. Settings are saved locally.",
+                11, TextAnchor.MiddleLeft, FontStyle.Italic);
+        }
+
+        /// <summary>Open the window directly to the server settings (used by the tab button).</summary>
+        public void ShowSettings() { _showSettings = true; Show(); }
+
         // ── Net events ──────────────────────────────────────────────────────
         private void WireNet()
         {
@@ -168,6 +199,15 @@ namespace WorldboxMP.Client.UI
                           Net.State == ConnState.Connecting ? "Connecting..." : "Disconnected";
             string who = Net.LoggedIn ? $" | {Net.Username}" : "";
             _statusText.text = $"{conn}{who}";
+
+            // Settings overrides everything when open.
+            if (_settingsPanel != null && _showSettings)
+            {
+                _loginPanel.SetActive(false); _lobbyPanel.SetActive(false); _roomPanel.SetActive(false);
+                _settingsPanel.SetActive(true);
+                return;
+            }
+            if (_settingsPanel != null) _settingsPanel.SetActive(false);
 
             bool loggedIn = Net.LoggedIn;
             bool inRoom = Net.InRoom;

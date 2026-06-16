@@ -46,6 +46,9 @@ namespace WorldboxMP.Client.UI
                         MultiplayerWindow.Instance?.Show();
                     });
 
+                AddButton("wbmp_settings", "Server settings",
+                    new Color(0.55f, 0.55f, 0.60f), tab, () => MultiplayerWindow.Instance?.ShowSettings());
+
                 _created = true;
                 ModLog.Info("Multiplayer tab created.");
                 return true;

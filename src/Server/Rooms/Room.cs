@@ -76,6 +76,9 @@ namespace WorldboxMP.Server.Rooms
 
         public Member Get(string id4) => _members.TryGetValue(id4, out var m) ? m : null;
 
+        /// <summary>The current king member, or null.</summary>
+        public Member GetKing() => KingId4 != null ? Get(KingId4) : null;
+
         public bool Contains(string id4) => _members.ContainsKey(id4);
 
         public RoomRoster BuildRoster()

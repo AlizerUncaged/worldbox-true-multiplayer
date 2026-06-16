@@ -225,11 +225,25 @@ namespace WorldboxMP.Shared.Protocol
         public void Deserialize(NetDataReader r) { Kind = r.GetByte(); SenderId4 = r.GetString(); Payload = r.GetBytesWithLength(); }
     }
 
-    /// <summary>Full-world snapshot (zlib JSON from SaveManager) sent to a joining player.</summary>
+    /// <summary>
+    /// Server → king: "a player just joined; please produce a world snapshot for them."
+    /// </summary>
+    public class SnapshotRequest : INetSerializable
+    {
+        public string ForId4 = "";
+        public void Serialize(NetDataWriter w) { w.Put(ForId4); }
+        public void Deserialize(NetDataReader r) { ForId4 = r.GetString(); }
+    }
+
+    /// <summary>
+    /// Full-world snapshot (zlib JSON from SaveManager). King → server → the one
+    /// joining player identified by <see cref="TargetId4"/>.
+    /// </summary>
     public class WorldSnapshot : INetSerializable
     {
+        public string TargetId4 = "";
         public byte[] Data = System.Array.Empty<byte>();
-        public void Serialize(NetDataWriter w) { w.PutBytesWithLength(Data); }
-        public void Deserialize(NetDataReader r) { Data = r.GetBytesWithLength(); }
+        public void Serialize(NetDataWriter w) { w.Put(TargetId4); w.PutBytesWithLength(Data); }
+        public void Deserialize(NetDataReader r) { TargetId4 = r.GetString(); Data = r.GetBytesWithLength(); }
     }
 }

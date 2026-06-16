@@ -52,6 +52,8 @@ namespace WorldboxMP.Client.Net
         public event Action OnLogsChanged;
         public event Action<CursorUpdate> OnRemoteCursor;
         public event Action<MirrorMessage> OnMirror;
+        public event Action<SnapshotRequest> OnSnapshotRequested;
+        public event Action<WorldSnapshot> OnSnapshotReceived;
 
         public NetClient()
         {
@@ -143,7 +145,24 @@ namespace WorldboxMP.Client.Net
             _proc.SubscribeNetSerializable<LogListResponse>(p => { Logs = p.Entries; OnLogsChanged?.Invoke(); });
             _proc.SubscribeNetSerializable<CursorUpdate>(p => OnRemoteCursor?.Invoke(p));
             _proc.SubscribeNetSerializable<MirrorMessage>(p => OnMirror?.Invoke(p));
+            _proc.SubscribeNetSerializable<SnapshotRequest>(p => OnSnapshotRequested?.Invoke(p));
+            _proc.SubscribeNetSerializable<WorldSnapshot>(p => OnSnapshotReceived?.Invoke(p));
         }
+
+        /// <summary>King → server → joiner: ship the current world snapshot.</summary>
+        public void SendSnapshot(string targetId4, byte[] data) =>
+            Send(new WorldSnapshot { TargetId4 = targetId4, Data = data ?? Array.Empty<byte>() });
+
+        /// <summary>Change target endpoint and reconnect (used by the settings dialog).</summary>
+        public void Reconnect(string host, int port)
+        {
+            Disconnect();
+            _host = host; _port = port;
+            Connect(host, port);
+        }
+
+        public string Host => _host;
+        public int Port => _port;
 
         private void OnAuthResponse(AuthResponse p)
         {

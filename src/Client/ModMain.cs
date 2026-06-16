@@ -26,16 +26,22 @@ namespace WorldboxMP.Client
             try { IconFactory.ModFolder = GetDeclaration()?.FolderPath; }
             catch { IconFactory.ModFolder = null; }
 
-            // Harmony (mirroring patches register here as the feature lands).
-            new Harmony("alizer.worldboxmp").PatchAll(GetType().Assembly);
+            var harmony = new Harmony("alizer.worldboxmp");
+            harmony.PatchAll(GetType().Assembly);
 
             // Networking + UI.
             var net = new NetClient();
             MultiplayerWindow.Ensure();
             NetPump.Spawn();
+            UI.PlayerCursors.Spawn();
 
-            net.Connect(ServerHost, ServerPort);
-            ModLog.Info($"Connecting to {ServerHost}:{ServerPort} (F9 toggles the manager).");
+            // Mirroring (god powers / spawns / world sync / cursors).
+            Mirror.MirrorManager.Init(harmony);
+
+            string host = Net.ServerConfig.Host;
+            int port = Net.ServerConfig.Port;
+            net.Connect(host, port);
+            ModLog.Info($"Connecting to {host}:{port} (F9 toggles the manager).");
         }
     }
 }

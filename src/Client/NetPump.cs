@@ -27,6 +27,7 @@ namespace WorldboxMP.Client
             if (net == null) return;
 
             net.Poll();
+            Mirror.MirrorManager.Instance?.Pump(Time.unscaledDeltaTime);
 
             // Auto-reconnect.
             if (net.State == ConnState.Disconnected)

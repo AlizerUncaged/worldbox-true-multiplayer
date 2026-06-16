@@ -98,6 +98,7 @@ namespace WorldboxMP.Server.Net
             _proc.SubscribeNetSerializable<CursorUpdate, NetPeer>(OnCursor);
             _proc.SubscribeNetSerializable<LogListRequest, NetPeer>(OnLogList);
             _proc.SubscribeNetSerializable<MirrorMessage, NetPeer>(OnMirror);
+            _proc.SubscribeNetSerializable<WorldSnapshot, NetPeer>(OnWorldSnapshot);
         }
 
         private Session SessionOf(NetPeer peer) => _sessions.TryGetValue(peer, out var s) ? s : null;
@@ -149,6 +150,11 @@ namespace WorldboxMP.Server.Net
             if (room == null) { peer.Send(_proc, new RoomError { Message = err }); return; }
             var me = room.Get(s.Id4);
             peer.Send(_proc, new RoomJoined { ShareableId = room.ShareableId, Name = room.Name, MyRole = (byte)(me?.Role ?? RoomRole.Player) });
+
+            // Ask the king (if any, and not us) to send this joiner the current world.
+            var king = room.GetKing();
+            if (king != null && king.Id4 != s.Id4)
+                king.Session.Peer.Send(_proc, new SnapshotRequest { ForId4 = s.Id4 });
         }
 
         private void OnLeaveRoom(LeaveRoomRequest req, NetPeer peer)
@@ -189,10 +195,34 @@ namespace WorldboxMP.Server.Net
         private void OnMirror(MirrorMessage msg, NetPeer peer)
         {
             var s = SessionOf(peer); if (s == null || s.CurrentRoom == null) return;
+            var room = s.CurrentRoom;
             msg.SenderId4 = s.Id4;
-            // Foundation behavior: relay to the rest of the room. The king-authoritative
-            // routing (intents -> king, state -> everyone) lands in the mirroring milestone.
-            s.CurrentRoom.BroadcastExcept(_proc, s.Id4, msg);
+
+            // King-authoritative routing:
+            //  - From the king  → authoritative event, fan out to everyone else.
+            //  - From a player   → an intent, forward only to the king to execute.
+            if (room.KingId4 == s.Id4)
+            {
+                room.BroadcastExcept(_proc, s.Id4, msg);
+            }
+            else
+            {
+                var king = room.GetKing();
+                king?.Session.Peer.Send(_proc, msg);
+            }
+        }
+
+        private void OnWorldSnapshot(WorldSnapshot snap, NetPeer peer)
+        {
+            var s = SessionOf(peer); if (s == null || s.CurrentRoom == null) return;
+            // Only the king ships snapshots; forward to the single target joiner.
+            if (s.CurrentRoom.KingId4 != s.Id4) return;
+            var target = s.CurrentRoom.Get(snap.TargetId4);
+            if (target != null)
+            {
+                target.Session.Peer.Send(_proc, snap, DeliveryMethod.ReliableOrdered);
+                Log($"Relayed world snapshot ({snap.Data.Length} bytes) {s.Username} → {target.Username}.");
+            }
         }
 
         // ── Logging ─────────────────────────────────────────────────────────
