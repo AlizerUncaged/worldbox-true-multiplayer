@@ -51,7 +51,7 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _addStatusMethod; // Actor.addStatusEffect(string,float,bool) is internal
 
         // Registry of structural objects synced generically (Data + manager.loadObject).
-        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; }
+        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; }
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
         private bool _applyingStatus, _applyingEquip, _applyingObject, _applyingMember, _applyingCapture, _applyingKProp;
 
@@ -137,6 +137,12 @@ namespace WorldboxMP.Client.Mirror
             if (!Active || !IsKing || ApplyingSpawn || actor == null) return;
             try
             {
+                // The live actor.data has save-derived fields (asset_id, coordinates,
+                // equipment, profession, home, …) UNSET — they're only populated when the
+                // game saves the actor. Without this the follower's loadObject sees a null
+                // asset_id and throws ArgumentNullException. prepareForSave() fills them.
+                try { actor.prepareForSave(); } catch (Exception pe) { ModLog.Warn("[KING] prepareForSave: " + pe.Message); }
+
                 var data = _actorDataField?.GetValue(actor) as ActorData;
                 if (data == null) { ModLog.Warn("[KING] spawn: actor.data null/inaccessible"); return; }
 
@@ -202,7 +208,13 @@ namespace WorldboxMP.Client.Mirror
         private static void BuildObjectRegistry()
         {
             void Reg(byte kind, Type obj, Type data, Func<object> mgr) =>
-                _objReg.Add(new ObjReg { Kind = kind, ObjType = obj, DataType = data, Mgr = mgr, DataField = AccessTools.Field(obj, "data") });
+                _objReg.Add(new ObjReg { Kind = kind, ObjType = obj, DataType = data, Mgr = mgr,
+                    DataField = AccessTools.Field(obj, "data"),
+                    // The game populates save-derived fields (e.g. BuildingData.asset_id) only
+                    // in getData()/prepareForSave(); without them a building loads with a null
+                    // asset and crashes the follower sim. Call them before serializing, like save does.
+                    PrepareForSave = AccessTools.Method(obj, "prepareForSave"),
+                    GetData = AccessTools.Method(obj, "getData") });
             Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
             Reg(2, typeof(City), typeof(CityData), () => World.world.cities);
             Reg(3, typeof(War), typeof(WarData), () => World.world.wars);
@@ -248,7 +260,11 @@ namespace WorldboxMP.Client.Mirror
                 foreach (var r in _objReg)
                     if (r.ObjType.IsInstanceOfType(obj))
                     {
-                        var data = r.DataField?.GetValue(obj);
+                        // Populate save-derived fields on the live data first (asset_id, etc.).
+                        try { r.PrepareForSave?.Invoke(obj, null); } catch (Exception pe) { ModLog.Warn($"[KING] {r.ObjType.Name}.prepareForSave: " + pe.Message); }
+                        object data = null;
+                        try { data = r.GetData?.Invoke(obj, null); } catch (Exception ge) { ModLog.Warn($"[KING] {r.ObjType.Name}.getData: " + ge.Message); }
+                        if (data == null) data = r.DataField?.GetValue(obj);   // fallback to live data field
                         if (data == null) return;
                         Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg
                         { Kind = r.Kind, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
