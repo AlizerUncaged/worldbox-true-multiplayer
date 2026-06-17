@@ -57,7 +57,23 @@ namespace WorldboxMP.Server
             catch (Exception ex)
             {
                 Console.WriteLine("\nERROR: could not connect to MongoDB.\n" + ex);
-                Console.WriteLine("\nLikely the Atlas cluster is paused/unreachable, or the connection string/credentials are wrong.");
+
+                bool timedOut = ex is TimeoutException
+                    || ex.Message.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0
+                    || ex.Message.IndexOf("selecting a server", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (timedOut)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
+                    Console.WriteLine(" CONNECTION TIMED OUT — whitelist your IP in MongoDB Atlas! ".Pastel(System.Drawing.Color.Gold));
+                    Console.WriteLine(" Atlas → Network Access → Add IP Address → 'Add Current IP'  ".Pastel(System.Drawing.Color.Gold));
+                    Console.WriteLine(" (or 0.0.0.0/0 to allow all). Atlas drops your IP regularly. ".Pastel(System.Drawing.Color.Gold));
+                    Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
+                }
+                else
+                {
+                    Console.WriteLine("\nLikely the Atlas cluster is paused, or the connection string/credentials are wrong.");
+                }
                 Console.WriteLine("Override with env WBMP_MONGO=<connection string> and restart.");
                 Pause();   // do not exit silently — wait so the error is readable
                 return;
