@@ -68,6 +68,7 @@ namespace WorldboxMP.Client.Mirror
         private readonly List<MoveMsg> _pendingMoves = new List<MoveMsg>(128);
         private bool _applyingMove;
         private float _snapshotTimer;
+        private float _timeTimer;
         // Periodic full resync is DISABLED (0): each snapshot is a full world reload,
         // which is far too disruptive to run on a timer. The world is sent once on
         // join, and otherwise only when a player explicitly presses "Resync". All
@@ -714,6 +715,15 @@ namespace WorldboxMP.Client.Mirror
             {
                 Send(MirrorKind.Move, MirrorCodec.WriteMoveBatch(_pendingMoves));
                 _pendingMoves.Clear();
+            }
+
+            // Low-rate authoritative clock correction (single scalar — not position polling)
+            // so the year/season/day stays locked across clients without drift.
+            _timeTimer += dt;
+            if (_timeTimer >= 4f)
+            {
+                _timeTimer = 0f;
+                try { Send(MirrorKind.Time, MirrorCodec.Write(new TimeMsg { WorldTime = World.world.getCurWorldTime() })); } catch { }
             }
 
             if (PeriodicSnapshotSeconds > 0f)
