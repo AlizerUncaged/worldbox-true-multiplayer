@@ -27,11 +27,16 @@ namespace WorldboxMP.Client.Dev
             _started = true;
 
             // 1) Log file FIRST — this survives a crash even if the console window closes.
+            // Multiple game instances share persistentDataPath, so a single fixed name
+            // causes a "sharing violation" on the 2nd+ instance. Make it per-process and
+            // open with FileShare.Read so the file is tail-able while we hold it.
             try
             {
-                LogPath = Path.Combine(Application.persistentDataPath, "wbmp-client.log");
-                _file = new StreamWriter(LogPath, append: false, new UTF8Encoding(false)) { AutoFlush = true };
-                _file.WriteLine($"==== WorldBox Multiplayer client log — {DateTime.Now} ====");
+                int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+                LogPath = Path.Combine(Application.persistentDataPath, $"wbmp-client-{pid}.log");
+                var fs = new FileStream(LogPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+                _file = new StreamWriter(fs, new UTF8Encoding(false)) { AutoFlush = true };
+                _file.WriteLine($"==== WorldBox Multiplayer client log — pid {pid} — {DateTime.Now} ====");
                 // Capture EVERYTHING (incl. uncaught exceptions) to the file.
                 Application.logMessageReceivedThreaded += OnUnityLog;
             }

@@ -136,6 +136,15 @@ namespace WorldboxMP.Client.Mirror
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
+                // Defensive: on followers, the mirrored world can briefly hold a building
+                // with a null current_tile (e.g. created via loadObject before its tile is
+                // linked). BatchBuildings.updateVisibility then NREs every sim tick inside
+                // a parallel job — an exception storm that stalls the whole update loop
+                // (kills input/zoom/spawn). Swallow it on followers so the client stays
+                // responsive; the king is authoritative and must NOT mask real bugs.
+                var bbVis = AccessTools.Method(typeof(BatchBuildings), "updateVisibility");
+                if (bbVis != null) harmony.Patch(bbVis, finalizer: H(nameof(BatchBuildingsVisibility_Finalizer)));
+
                 // Our runtime world reloads (join snapshot / resync) can re-enter the
                 // window preloader and call instantiateWindow twice for the same id,
                 // which throws a duplicate-key ArgumentException and aborts the load.
@@ -344,6 +353,25 @@ namespace WorldboxMP.Client.Mirror
         {
             var m = MirrorManager.Instance;
             return m == null || !m.IsFollower;
+        }
+
+        private static int _bbErrLogged;
+        // Finalizer: swallow building-visibility NREs ONLY on followers, and log the
+        // first few so we can still find the root cause (null current_tile building).
+        private static Exception BatchBuildingsVisibility_Finalizer(Exception __exception)
+        {
+            if (__exception == null) return null;
+            var m = MirrorManager.Instance;
+            if (m != null && m.IsFollower)
+            {
+                if (_bbErrLogged < 3)
+                {
+                    _bbErrLogged++;
+                    ModLog.Warn("[FOLLOWER] BatchBuildings.updateVisibility swallowed (null-tile building?): " + __exception.Message);
+                }
+                return null; // suppress
+            }
+            return __exception; // king: surface it
         }
     }
 }
