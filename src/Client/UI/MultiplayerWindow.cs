@@ -67,11 +67,22 @@ namespace WorldboxMP.Client.UI
         {
             _host = ContentTransform;
 
-            // Let sections fill the content width inside the frame.
+            // Let sections fill the content width inside the frame, centered.
             var lg = GetLayoutGroup();
             lg.childControlWidth = true; lg.childForceExpandWidth = true;
             lg.childControlHeight = true; lg.childForceExpandHeight = false;
-            lg.spacing = 6; lg.padding = new RectOffset(6, 6, 8, 8);
+            lg.childAlignment = TextAnchor.UpperCenter;
+            lg.spacing = 8; lg.padding = new RectOffset(12, 12, 10, 12);
+
+            // Title banner.
+            var banner = IconFactory.GetEmbedded("title-banner.png", padToSquare: false);
+            if (banner != null)
+            {
+                var bgo = UiKit.MakeRect("Banner", _host);
+                var bimg = bgo.AddComponent<Image>();
+                bimg.sprite = banner; bimg.preserveAspect = true; bimg.raycastTarget = false;
+                UiKit.SetHeight(bgo, 60f);
+            }
 
             _statusText = UiKit.MakeText("Status", _host, "", 12, TextAnchor.MiddleCenter, FontStyle.Bold);
             UiKit.SetHeight(_statusText.gameObject, 18f);
@@ -88,7 +99,7 @@ namespace WorldboxMP.Client.UI
 
         private void BuildLoginPanel()
         {
-            _loginPanel = UiKit.MakeColumn("Login", _host, null);
+            _loginPanel = UiKit.MakeColumn("Login", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
             UiKit.MakeText("h", _loginPanel.transform, "Account", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _userField = UiKit.MakeInput("User", _loginPanel.transform, "Username", false, 24);
             _passField = UiKit.MakeInput("Pass", _loginPanel.transform, "Password", true, 64);
@@ -103,7 +114,7 @@ namespace WorldboxMP.Client.UI
 
         private void BuildLobbyPanel()
         {
-            _lobbyPanel = UiKit.MakeColumn("Lobby", _host, null);
+            _lobbyPanel = UiKit.MakeColumn("Lobby", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
 
             UiKit.MakeText("ch", _lobbyPanel.transform, "Create a room", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _roomNameField = UiKit.MakeInput("RName", _lobbyPanel.transform, "Room name", false, 40);
@@ -134,7 +145,7 @@ namespace WorldboxMP.Client.UI
 
         private void BuildRoomPanel()
         {
-            _roomPanel = UiKit.MakeColumn("RoomP", _host, null);
+            _roomPanel = UiKit.MakeColumn("RoomP", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
             var brow = UiKit.MakeRow("RTopRow", _roomPanel.transform);
             UiKit.MakeButton("Logs", brow.transform, "Logs", () => Net.RequestLogs(), UiKit.ButtonGrey);
             UiKit.MakeButton("Resync", brow.transform, "Resync", () => Mirror.MirrorManager.Instance?.ForceSnapshotToAll(), UiKit.ButtonGrey);
@@ -147,7 +158,7 @@ namespace WorldboxMP.Client.UI
 
         private void BuildSettingsPanel()
         {
-            _settingsPanel = UiKit.MakeColumn("Settings", _host, null);
+            _settingsPanel = UiKit.MakeColumn("Settings", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
             UiKit.MakeText("sh", _settingsPanel.transform, "Server", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _hostField = UiKit.MakeInput("Host", _settingsPanel.transform, "Host (e.g. 127.0.0.1)", false, 64);
             _portField = UiKit.MakeInput("Port", _settingsPanel.transform, "Port", false, 6);

@@ -59,6 +59,14 @@ namespace WorldboxMP.Client.Mirror
                 var setLaw = AccessTools.Method(typeof(WorldLaws), "setAgeEnabled", new[] { typeof(string), typeof(bool) });
                 if (setLaw != null) harmony.Patch(setLaw, postfix: H(nameof(SetWorldLaw_Postfix)));
 
+                // New-year boundary (fires once per in-game year) → sync world time.
+                var objAge = AccessTools.Method(typeof(MapBox), "updateObjectAge");
+                if (objAge != null) harmony.Patch(objAge, postfix: H(nameof(UpdateObjectAge_Postfix)));
+
+                // Actor rename.
+                var setName = AccessTools.Method(typeof(NanoObject), "setName", new[] { typeof(string), typeof(bool) });
+                if (setName != null) harmony.Patch(setName, postfix: H(nameof(SetName_Postfix)));
+
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
@@ -114,6 +122,16 @@ namespace WorldboxMP.Client.Mirror
         private static void SetWorldLaw_Postfix(string pID, bool pValue)
         {
             MirrorManager.Instance?.OnKingLaw(pID, pValue);
+        }
+
+        private static void UpdateObjectAge_Postfix()
+        {
+            MirrorManager.Instance?.OnKingYear();
+        }
+
+        private static void SetName_Postfix(NanoObject __instance, string pName)
+        {
+            if (__instance is Actor a) MirrorManager.Instance?.OnKingRename(a, pName);
         }
 
         private static void AddTrait_Postfix(Actor __instance, string pTraitID)

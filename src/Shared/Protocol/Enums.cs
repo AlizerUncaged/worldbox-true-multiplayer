@@ -63,5 +63,11 @@ namespace WorldboxMP.Shared.Protocol
 
         /// <summary>A world law was toggled (WorldLaws.setAgeEnabled).</summary>
         WorldLaw = 9,
+
+        /// <summary>World time/year sync (MapStats.world_time), on each year boundary.</summary>
+        Time = 10,
+
+        /// <summary>An actor was renamed (NanoObject.setName).</summary>
+        Rename = 11,
     }
 }

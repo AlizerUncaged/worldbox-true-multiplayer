@@ -15,6 +15,8 @@ namespace WorldboxMP.Client.UI
         public static readonly Color ButtonRed = new Color(0.78f, 0.25f, 0.22f, 1f);
         public static readonly Color ButtonGrey = new Color(0.32f, 0.34f, 0.38f, 1f);
         public static readonly Color InputBg = new Color(0.08f, 0.085f, 0.10f, 1f);
+        // Subtle card behind each section to group fields against the native frame.
+        public static readonly Color CardBg = new Color(0.10f, 0.11f, 0.13f, 0.62f);
         // WorldBox's signature header orange (#F3961F).
         public static readonly Color Orange = new Color(0.953f, 0.588f, 0.122f, 1f);
 

@@ -42,6 +42,9 @@ namespace WorldboxMP.Client.Mirror
         private static FieldInfo _actorDataField;
         private static FieldInfo _subDataField;
         private static FieldInfo _worldLawsField;   // MapBox.world_laws is internal
+        private static FieldInfo _mapStatsField;    // MapBox.map_stats is internal
+        private static FieldInfo _worldTimeField;   // MapStats.world_time (public field, reached via internal map_stats)
+        private static MethodInfo _mapStatsLoad;    // MapStats.load() refreshes year cache
 
         // Movement is event-based: the king's per-tile moveTo commits are collected
         // here and flushed once per frame (no polling/interval).
@@ -66,6 +69,9 @@ namespace WorldboxMP.Client.Mirror
             _actorDataField = AccessTools.Field(typeof(Actor), "data");
             _subDataField = AccessTools.Field(typeof(Subspecies), "data");
             _worldLawsField = AccessTools.Field(typeof(MapBox), "world_laws");
+            _mapStatsField = AccessTools.Field(typeof(MapBox), "map_stats");
+            _worldTimeField = AccessTools.Field(typeof(MapStats), "world_time");
+            _mapStatsLoad = AccessTools.Method(typeof(MapStats), "load");
             GameHooks.Apply(harmony);
 
             var net = NetClient.Instance;
@@ -166,6 +172,20 @@ namespace WorldboxMP.Client.Mirror
             Send(MirrorKind.WorldLaw, MirrorCodec.Write(new WorldLawMsg { Id = id, Value = value }));
         }
 
+        public void OnKingYear()
+        {
+            if (!Active || !IsKing) return;
+            try { Send(MirrorKind.Time, MirrorCodec.Write(new TimeMsg { WorldTime = World.world.getCurWorldTime() })); }
+            catch (Exception e) { ModLog.Warn("OnKingYear failed: " + e.Message); }
+        }
+
+        private bool _applyingRename;
+        public void OnKingRename(Actor actor, string name)
+        {
+            if (!Active || !IsKing || _applyingRename || actor == null) return;
+            Send(MirrorKind.Rename, MirrorCodec.Write(new RenameMsg { Id = actor.id, Name = name }));
+        }
+
         // ── Incoming ────────────────────────────────────────────────────────
         private void OnMirror(MirrorMessage msg)
         {
@@ -196,6 +216,12 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.WorldLaw:
                     if (IsFollower) ApplyLaw(MirrorCodec.ReadWorldLaw(msg.Payload));
+                    break;
+                case MirrorKind.Time:
+                    if (IsFollower) ApplyTime(MirrorCodec.ReadTime(msg.Payload));
+                    break;
+                case MirrorKind.Rename:
+                    if (IsFollower) ApplyRename(MirrorCodec.ReadRename(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -299,6 +325,28 @@ namespace WorldboxMP.Client.Mirror
                 else WorldBehaviourActionFire.removeFire(tile);
             }
             catch (Exception e) { ModLog.Warn("ApplyFire failed: " + e.Message); }
+        }
+
+        private void ApplyTime(TimeMsg m)
+        {
+            try
+            {
+                var stats = _mapStatsField?.GetValue(World.world);
+                if (stats == null) return;
+                _worldTimeField?.SetValue(stats, m.WorldTime);
+                _mapStatsLoad?.Invoke(stats, null);   // refresh year/month cache
+            }
+            catch (Exception e) { ModLog.Warn("ApplyTime failed: " + e.Message); }
+        }
+
+        private void ApplyRename(RenameMsg m)
+        {
+            var a = Resolve(m.Id);
+            if (a == null) return;
+            _applyingRename = true;
+            try { a.setName(m.Name, false); }
+            catch (Exception e) { ModLog.Warn("ApplyRename failed: " + e.Message); }
+            finally { _applyingRename = false; }
         }
 
         private void ApplyLaw(WorldLawMsg m)

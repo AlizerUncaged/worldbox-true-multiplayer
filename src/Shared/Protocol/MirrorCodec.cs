@@ -26,6 +26,8 @@ namespace WorldboxMP.Shared.Protocol
     public struct TraitMsg { public long KingId; public string TraitId; public bool Add; }
     public struct MoveMsg { public long KingId; public int X; public int Y; }
     public struct WorldLawMsg { public string Id; public bool Value; }
+    public struct TimeMsg { public double WorldTime; }
+    public struct RenameMsg { public long Id; public string Name; }
 
     /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
@@ -98,6 +100,24 @@ namespace WorldboxMP.Shared.Protocol
             for (int i = 0; i < n; i++)
                 list.Add(new MoveMsg { KingId = r.GetLong(), X = r.GetInt(), Y = r.GetInt() });
             return list;
+        }
+
+        public static byte[] Write(TimeMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.WorldTime); return w.CopyData();
+        }
+        public static TimeMsg ReadTime(byte[] data)
+        {
+            var r = new NetDataReader(data); return new TimeMsg { WorldTime = r.GetDouble() };
+        }
+
+        public static byte[] Write(RenameMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.Id); w.Put(m.Name ?? ""); return w.CopyData();
+        }
+        public static RenameMsg ReadRename(byte[] data)
+        {
+            var r = new NetDataReader(data); return new RenameMsg { Id = r.GetLong(), Name = r.GetString() };
         }
 
         public static byte[] Write(WorldLawMsg m)
