@@ -43,13 +43,14 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _die;
         private static MethodInfo _setStatsDirty, _updateStats;
 
-        /// <summary>Force a follower actor to recompute its derived stats (speed, combat,
-        /// genes-driven traits…) from its synced subspecies/traits, so it isn't stuck on
-        /// empty/default stats (which floored movement speed).</summary>
-        private void ForceStats(Actor a)
+        /// <summary>Mark a follower actor stats-dirty so the game's own parallel update_stats
+        /// job recomputes its derived stats (speed/combat/etc.) from the synced
+        /// subspecies+traits. We only MARK it — we do NOT call updateStats ourselves
+        /// (doing that mid-frame corrupted render data). The batch recomputes at the safe time.</summary>
+        private void MarkStatsDirty(Actor a)
         {
             if (a == null) return;
-            try { _setStatsDirty?.Invoke(a, null); _updateStats?.Invoke(a, null); } catch { }
+            try { _setStatsDirty?.Invoke(a, null); } catch { }
         }
         private static MethodInfo _checkSprite;
         // Actor.data / Subspecies.data are internal at runtime (the publicized DLL
@@ -82,6 +83,7 @@ namespace WorldboxMP.Client.Mirror
         private bool _applyingMove;
         private float _snapshotTimer;
         private float _timeTimer;
+        private float _shortPollTimer, _longPollTimer, _extraLongPollTimer;
         // Periodic full resync is DISABLED (0): each snapshot is a full world reload,
         // which is far too disruptive to run on a timer. The world is sent once on
         // join, and otherwise only when a player explicitly presses "Resync". All
@@ -394,6 +396,11 @@ namespace WorldboxMP.Client.Mirror
                 case MirrorKind.Time:
                     if (IsFollower) ApplyTime(MirrorCodec.ReadTime(msg.Payload));
                     break;
+                case MirrorKind.ShortPoll:
+                case MirrorKind.LongPoll:
+                case MirrorKind.ExtraLongPoll:
+                    if (IsFollower) { var sb = MirrorCodec.ReadScalarBatch(msg.Payload, out var pk); ApplyPoll(sb, pk); }
+                    break;
                 case MirrorKind.Rename:
                     if (IsFollower) ApplyRename(MirrorCodec.ReadRename(msg.Payload));
                     break;
@@ -482,6 +489,7 @@ namespace WorldboxMP.Client.Mirror
                 {
                     _kingToLocal[a.id] = a;   // a.id == king's id (loadObject preserves it)
                     try { _checkSprite?.Invoke(a, null); } catch { }
+                    MarkStatsDirty(a);   // recompute speed/combat from synced subspecies+traits
                     ModLog.Info($"[FOLLOWER] spawned id={a.id}");
                 }
                 else ModLog.Warn("[FOLLOWER] loadObject returned null (tile/asset missing on this client?)");
@@ -736,6 +744,34 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn("ApplyTrait failed: " + e.Message); }
         }
 
+        // Follower: apply a poll batch. Age forces getAge()==king by nudging age_overgrowth
+        // (created_time+world_time are already synced, this corrects any residual drift),
+        // and every poll re-marks the actor stats-dirty so derived stats stay correct.
+        private void ApplyPoll(List<ScalarMsg> list, byte kind)
+        {
+            if (list == null) return;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var m = list[i];
+                var a = Resolve(m.Id);
+                if (a == null || !a.isAlive()) continue;
+                try
+                {
+                    if (kind == PollKind.Age)
+                    {
+                        var data = _actorDataField?.GetValue(a) as ActorData;
+                        if (data != null)
+                        {
+                            int delta = m.V - a.getAge();      // king age - follower age
+                            if (delta != 0) data.age_overgrowth += delta;
+                        }
+                    }
+                    MarkStatsDirty(a);
+                }
+                catch { }
+            }
+        }
+
         private void ApplySimControl(SimControlMsg m)
         {
             try
@@ -789,6 +825,35 @@ namespace WorldboxMP.Client.Mirror
                 _snapshotTimer += dt;
                 if (_snapshotTimer >= PeriodicSnapshotSeconds) { _snapshotTimer = 0f; ForceSnapshotToAll(); }
             }
+
+            // ── Poll tiers (continuous/Update()-based values we don't send per-frame) ──
+            _shortPollTimer += dt;
+            if (_shortPollTimer >= 0.1f) { _shortPollTimer = 0f; /* reserved: stats that truly need 100ms */ }
+            _longPollTimer += dt;
+            if (_longPollTimer >= 0.5f) { _longPollTimer = 0f; SendLongPoll(); }
+            _extraLongPollTimer += dt;
+            if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; /* reserved: slow-changing state */ }
+        }
+
+        // long_poll (500ms): age — derived from world-time + age_overgrowth on the king; we
+        // send the authoritative age so followers (whose passive sim doesn't age identically)
+        // stay matched. Cheap (id+int per actor). Extend here for other ~2Hz scalars.
+        private void SendLongPoll()
+        {
+            try
+            {
+                var units = World.world?.units?.getSimpleList();
+                if (units == null) return;
+                var list = new List<ScalarMsg>(units.Count);
+                for (int i = 0; i < units.Count; i++)
+                {
+                    var a = units[i];
+                    if (a != null && a.isAlive()) list.Add(new ScalarMsg { Id = a.id, V = a.getAge() });
+                }
+                if (list.Count > 0)
+                    Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Age, list));
+            }
+            catch (Exception e) { ModLog.Warn("SendLongPoll failed: " + e.Message); }
         }
 
         // ── Snapshots ───────────────────────────────────────────────────────
@@ -814,6 +879,12 @@ namespace WorldboxMP.Client.Mirror
         {
             WorldSync.Load(snap.Data);
             _kingToLocal.Clear();   // post-load actors carry king ids; new spawns repopulate the map
+            try
+            {
+                var list = World.world?.units?.getSimpleList();
+                if (list != null) for (int i = 0; i < list.Count; i++) MarkStatsDirty(list[i]);
+            }
+            catch (Exception e) { ModLog.Warn("post-snapshot MarkStatsDirty failed: " + e.Message); }
         }
 
         // ── Helpers ─────────────────────────────────────────────────────────

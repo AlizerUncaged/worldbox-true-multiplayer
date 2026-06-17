@@ -25,6 +25,9 @@ namespace WorldboxMP.Shared.Protocol
     public struct FireMsg { public int X; public int Y; public bool On; }
     public struct TraitMsg { public long KingId; public string TraitId; public bool Add; }
     public struct MoveMsg { public long KingId; public int X; public int Y; }
+    public struct ScalarMsg { public long Id; public int V; }
+    /// <summary>What a poll scalar batch carries (the 'kind' byte in WriteScalarBatch).</summary>
+    public static class PollKind { public const byte Age = 0; }
     public struct WorldLawMsg { public string Id; public bool Value; }
     public struct TimeMsg { public double WorldTime; }
     public struct RenameMsg { public long Id; public string Name; }
@@ -109,6 +112,27 @@ namespace WorldboxMP.Shared.Protocol
             var list = new List<MoveMsg>(n);
             for (int i = 0; i < n; i++)
                 list.Add(new MoveMsg { KingId = r.GetLong(), X = r.GetInt(), Y = r.GetInt() });
+            return list;
+        }
+
+        // Poll payload: a batch of per-entity (id, int value) scalars. Reused across poll
+        // tiers (age now; needs/etc. later). The 'kind' byte distinguishes what the value is.
+        public static byte[] WriteScalarBatch(byte kind, List<ScalarMsg> list)
+        {
+            var w = new NetDataWriter();
+            w.Put(kind);
+            w.Put((ushort)list.Count);
+            foreach (var m in list) { w.Put(m.Id); w.Put(m.V); }
+            return w.CopyData();
+        }
+        public static List<ScalarMsg> ReadScalarBatch(byte[] data, out byte kind)
+        {
+            var r = new NetDataReader(data);
+            kind = r.GetByte();
+            int n = r.GetUShort();
+            var list = new List<ScalarMsg>(n);
+            for (int i = 0; i < n; i++)
+                list.Add(new ScalarMsg { Id = r.GetLong(), V = r.GetInt() });
             return list;
         }
 

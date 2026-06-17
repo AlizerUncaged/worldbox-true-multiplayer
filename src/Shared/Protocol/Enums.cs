@@ -104,13 +104,16 @@ namespace WorldboxMP.Shared.Protocol
         /// <summary>A drop/disaster spawned (DropManager.spawn) — tile + drop id. Non-god-power only.</summary>
         Disaster = 21,
 
-        /// <summary>
-        /// The king's actor was given a pathfinding destination (Actor.goTo). Event-based
-        /// (fires on each new destination, NOT polled). Followers replay goTo so their OWN
-        /// pathfinding walks the actor there smoothly/continuously, instead of stop-starting
-        /// on per-tile Move events.
-        /// </summary>
+        /// <summary>(reserved / unused) former goTo destination sync.</summary>
         GoTo = 22,
+
+        /// <summary>Poll tiers for continuous/Update()-based values that we don't send per
+        /// frame (avoids flooding the server). The king periodically batches the relevant
+        /// per-entity scalars and followers apply them. short=100ms, long=500ms (default),
+        /// extra_long=1000ms. Payload is a kind-specific scalar batch.</summary>
+        ShortPoll = 23,
+        LongPoll = 24,
+        ExtraLongPoll = 25,
     }
 }
 
