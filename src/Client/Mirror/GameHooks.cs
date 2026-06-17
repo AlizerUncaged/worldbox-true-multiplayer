@@ -419,8 +419,11 @@ namespace WorldboxMP.Client.Mirror
         // tick rate; the king drives all autonomous world changes. Skips
         // cities/kingdoms/wars/cultures/drops/etc. Each subcall is isolated so one bad
         // entity (e.g. a not-yet-synced null kingdom) can't stall the frame.
+        internal static float LastSimElapsed;       // real updateSimulation arg (king + follower)
+        internal static int SimCallsThisInterval;   // how many times updateSimulation ran
         private static bool PassiveSim_Prefix(MapBox __instance, float pElapsed)
         {
+            LastSimElapsed = pElapsed; SimCallsThisInterval++;
             var m = MirrorManager.Instance;
             if (m == null || !m.IsFollower) return true; // king/idle: full simulation
 

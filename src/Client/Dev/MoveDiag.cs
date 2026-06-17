@@ -89,7 +89,8 @@ namespace WorldboxMP.Client.Dev
                 MirrorManager.DbgMovesNullResolve = MirrorManager.DbgMovesNoTile = MirrorManager.DbgMovesDead = MirrorManager.DbgMovesEx = 0;
                 MirrorManager.DbgObjSent = MirrorManager.DbgObjRecv = 0; MirrorManager.DbgLastMoveEx = "";
 
-                ModLog.Info($"[MOVEDIAG] role={role} speed={speed} ticks={ticks} unitMult={mult:F2} fixedDt={Time.fixedDeltaTime:F4} {actorInfo} | {flow}");
+                int simCalls = GameHooks.SimCallsThisInterval; GameHooks.SimCallsThisInterval = 0;
+                ModLog.Info($"[MOVEDIAG] role={role} speed={speed} ticks={ticks} unitMult={mult:F2} simElapsed={GameHooks.LastSimElapsed:F4} simCalls/2s={simCalls} fixedDt={Time.fixedDeltaTime:F4} {actorInfo} | {flow}");
             }
             catch (Exception e) { ModLog.Warn("[MOVEDIAG] " + e.Message); }
         }
