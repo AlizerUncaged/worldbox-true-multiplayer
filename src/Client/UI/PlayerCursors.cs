@@ -8,15 +8,27 @@ using WorldboxMP.Shared.Protocol;
 namespace WorldboxMP.Client.UI
 {
     /// <summary>
-    /// Renders each remote player's cursor as WorldBox's God Finger sprite with the
-    /// owning player's name centered horizontally underneath, and streams the local
-    /// player's cursor to the room in real time.
+    /// Renders each remote player's cursor as WorldBox's God Finger with the owning
+    /// player's name centered beneath it, and streams the local cursor to the room.
+    ///
+    /// Cursors live on a persistent screen-space overlay canvas (world→screen each
+    /// frame) so they survive world reloads (join snapshots) and are never culled by
+    /// the world layers.
     /// </summary>
     public class PlayerCursors : MonoBehaviour
     {
-        private class Visual { public GameObject Root; public SpriteRenderer Finger; public Text Label; public Vector3 Target; }
+        private class Visual
+        {
+            public RectTransform Root;
+            public Image Finger;
+            public Text Label;
+            public Vector2 WorldPos;     // smoothed world position
+            public Vector2 WorldTarget;  // latest received world position
+            public bool HasPos;
+        }
 
         private readonly Dictionary<string, Visual> _cursors = new Dictionary<string, Visual>();
+        private Canvas _canvas;
         private static Sprite _fingerSprite;
         private float _sendTimer;
         private const float SendInterval = 0.05f;   // 20 Hz
@@ -30,6 +42,13 @@ namespace WorldboxMP.Client.UI
 
         private void Awake()
         {
+            var canvasGo = new GameObject("WBMP_CursorCanvas");
+            canvasGo.transform.SetParent(transform, false);
+            _canvas = canvasGo.AddComponent<Canvas>();
+            _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            _canvas.sortingOrder = 31000;
+            canvasGo.AddComponent<CanvasScaler>().uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
+
             if (NetClient.Instance != null)
             {
                 NetClient.Instance.OnRemoteCursor += OnRemoteCursor;
@@ -39,85 +58,78 @@ namespace WorldboxMP.Client.UI
 
         private void Update()
         {
-            // Smoothly glide every remote cursor toward its latest target each frame.
+            var net = NetClient.Instance;
+            var cam = Camera.main;
+
+            // Reposition every remote cursor: smooth world pos → screen point.
             float t = 1f - Mathf.Exp(-Time.unscaledDeltaTime * 14f);
             foreach (var v in _cursors.Values)
-                if (v.Root != null)
-                    v.Root.transform.position = Vector3.Lerp(v.Root.transform.position, v.Target, t);
+            {
+                if (v.Root == null) continue;
+                if (!v.HasPos || cam == null) { v.Root.gameObject.SetActive(false); continue; }
+                v.WorldPos = Vector2.Lerp(v.WorldPos, v.WorldTarget, t);
+                Vector3 sp = cam.WorldToScreenPoint(new Vector3(v.WorldPos.x, v.WorldPos.y, 0f));
+                bool visible = sp.z > 0f;   // in front of the camera
+                v.Root.gameObject.SetActive(visible);
+                if (visible) v.Root.position = new Vector3(sp.x, sp.y, 0f);
+            }
 
-            var net = NetClient.Instance;
-            if (net == null || !net.InRoom || net.State != ConnState.Connected) return;
-            var cam = Camera.main;
-            if (cam == null) return;
-
+            if (net == null || !net.InRoom || net.State != ConnState.Connected || cam == null) return;
             _sendTimer += Time.unscaledDeltaTime;
             if (_sendTimer < SendInterval) return;
             _sendTimer = 0f;
-
             Vector3 world = cam.ScreenToWorldPoint(Input.mousePosition);
             net.SendCursor(world.x, world.y, Input.GetMouseButton(0));
         }
 
         private void OnRemoteCursor(CursorUpdate c)
         {
-            if (c.Id4 == NetClient.Instance.Id4) return;   // never draw our own
-            bool isNew = !_cursors.TryGetValue(c.Id4, out var v);
-            if (isNew)
+            if (c.Id4 == NetClient.Instance.Id4) return;
+            if (!_cursors.TryGetValue(c.Id4, out var v))
             {
                 v = CreateVisual(c.Id4);
                 _cursors[c.Id4] = v;
             }
-            // Update the interpolation target; Update() glides the finger toward it.
-            v.Target = new Vector3(c.X, c.Y, -10f);
-            if (isNew) v.Root.transform.position = v.Target;   // no glide-from-origin on first sight
-            if (v.Finger != null) v.Finger.transform.localScale = Vector3.one * (c.Pressed ? 0.42f : 0.5f);
+            v.WorldTarget = new Vector2(c.X, c.Y);
+            if (!v.HasPos) { v.WorldPos = v.WorldTarget; v.HasPos = true; }
         }
 
         private Visual CreateVisual(string id4)
         {
-            var root = new GameObject("cursor_" + id4);
-            root.transform.SetParent(transform, false);
+            var rootGo = new GameObject("cursor_" + id4, typeof(RectTransform));
+            rootGo.transform.SetParent(_canvas.transform, false);
+            var root = (RectTransform)rootGo.transform;
+            root.sizeDelta = new Vector2(40, 40);
 
-            // God Finger sprite (pivot offset so the fingertip is near the cursor point).
-            var fingerGo = new GameObject("finger");
-            fingerGo.transform.SetParent(root.transform, false);
-            fingerGo.transform.localPosition = new Vector3(0f, 0.55f, 0f);
-            var sr = fingerGo.AddComponent<SpriteRenderer>();
-            sr.sprite = FingerSprite();
-            sr.color = Color.white;
-            sr.sortingOrder = 32000;
-            fingerGo.transform.localScale = Vector3.one * 0.5f;
+            var fingerGo = new GameObject("finger", typeof(RectTransform));
+            fingerGo.transform.SetParent(root, false);
+            var fr = (RectTransform)fingerGo.transform;
+            fr.sizeDelta = new Vector2(40, 40);
+            fr.anchoredPosition = new Vector2(10, -16);   // tip near the actual point
+            var finger = fingerGo.AddComponent<Image>();
+            finger.sprite = FingerSprite();
+            finger.preserveAspect = true;
+            finger.raycastTarget = false;
 
-            // Name centered horizontally directly under the finger.
-            var canvasGo = new GameObject("label");
-            canvasGo.transform.SetParent(root.transform, false);
-            canvasGo.transform.localPosition = new Vector3(0f, -0.35f, 0f);
-            var canvas = canvasGo.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.WorldSpace;
-            canvas.sortingOrder = 32001;
-            var crt = (RectTransform)canvasGo.transform;
-            crt.sizeDelta = new Vector2(160, 26);
-            crt.pivot = new Vector2(0.5f, 0.5f);
-            canvasGo.transform.localScale = Vector3.one * 0.03f;
+            var labelGo = new GameObject("name", typeof(RectTransform));
+            labelGo.transform.SetParent(root, false);
+            var lr = (RectTransform)labelGo.transform;
+            lr.sizeDelta = new Vector2(160, 20);
+            lr.anchoredPosition = new Vector2(0, -34);    // centered under the finger
+            var label = labelGo.AddComponent<Text>();
+            OT.InitializeCommonText(label);
+            label.fontSize = 13;
+            label.alignment = TextAnchor.MiddleCenter;
+            label.horizontalOverflow = HorizontalWrapMode.Overflow;
+            label.verticalOverflow = VerticalWrapMode.Overflow;
+            label.color = ColorFor(id4);
+            label.raycastTarget = false;
+            label.text = NameOf(id4);
+            var ol = labelGo.AddComponent<Outline>();
+            ol.effectColor = new Color(0f, 0f, 0f, 0.9f);
+            ol.effectDistance = new Vector2(1.3f, -1.3f);
 
-            var txtGo = new GameObject("text");
-            txtGo.transform.SetParent(canvasGo.transform, false);
-            var txt = txtGo.AddComponent<Text>();
-            OT.InitializeCommonText(txt);
-            txt.fontSize = 18;
-            txt.alignment = TextAnchor.MiddleCenter;   // centered horizontally
-            txt.horizontalOverflow = HorizontalWrapMode.Overflow;
-            txt.verticalOverflow = VerticalWrapMode.Overflow;
-            txt.color = ColorFor(id4);
-            txt.text = NameOf(id4);
-            var outline = txtGo.AddComponent<Outline>();
-            outline.effectColor = new Color(0f, 0f, 0f, 0.85f);
-            outline.effectDistance = new Vector2(1.4f, -1.4f);
-            var trt = txt.rectTransform;
-            trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one;
-            trt.offsetMin = Vector2.zero; trt.offsetMax = Vector2.zero;
-
-            return new Visual { Root = root, Finger = sr, Label = txt };
+            return new Visual { Root = root, Finger = finger, Label = label };
         }
 
         private void PruneToRoster()
@@ -128,7 +140,7 @@ namespace WorldboxMP.Client.UI
             var stale = new List<string>();
             foreach (var kv in _cursors)
             {
-                if (!present.Contains(kv.Key)) { Destroy(kv.Value.Root); stale.Add(kv.Key); }
+                if (!present.Contains(kv.Key)) { if (kv.Value.Root != null) Destroy(kv.Value.Root.gameObject); stale.Add(kv.Key); }
                 else if (kv.Value.Label != null) kv.Value.Label.text = NameOf(kv.Key);
             }
             foreach (var id in stale) _cursors.Remove(id);
@@ -154,23 +166,7 @@ namespace WorldboxMP.Client.UI
         {
             if (_fingerSprite != null) return _fingerSprite;
             try { _fingerSprite = SpriteTextureLoader.getSprite("ui/Icons/iconGodFinger"); } catch { }
-            if (_fingerSprite == null) _fingerSprite = GenerateDot();  // fallback
             return _fingerSprite;
-        }
-
-        private static Sprite GenerateDot()
-        {
-            const int s = 16;
-            var tex = new Texture2D(s, s, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
-            float r = s / 2f;
-            for (int y = 0; y < s; y++)
-                for (int x = 0; x < s; x++)
-                {
-                    float d = Mathf.Sqrt((x - r) * (x - r) + (y - r) * (y - r));
-                    tex.SetPixel(x, y, new Color(1, 1, 1, d <= r - 1 ? 1f : 0f));
-                }
-            tex.Apply();
-            return Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 16f);
         }
     }
 }

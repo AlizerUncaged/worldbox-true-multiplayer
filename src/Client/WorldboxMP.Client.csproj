@@ -34,6 +34,9 @@
     <Reference Include="Assembly-CSharp">
       <HintPath>$(ModsDir)\NML\Assembly-CSharp-Publicized.dll</HintPath><Private>false</Private>
     </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(ManagedDir)\Newtonsoft.Json.dll</HintPath><Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine">
       <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath><Private>false</Private>
     </Reference>

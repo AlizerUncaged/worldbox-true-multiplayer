@@ -232,8 +232,8 @@ namespace WorldboxMP.Server.Net
                     break;
                 case MirrorKind.SpawnUnit:
                     var sp = MirrorCodec.ReadSpawn(msg.Payload);
-                    LogC($"[{room}] {s.Username} spawned '{sp.AssetId}' at ({sp.X},{sp.Y}) #{sp.KingId}",
-                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("spawned")} {Val(sp.AssetId)} {Dim($"at ({sp.X},{sp.Y}) #{sp.KingId}")}");
+                    LogC($"[{room}] {s.Username} spawned creature (sub {sp.SubId}, {sp.ActorJson.Length}B)",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("spawned")} {Val("creature")} {Dim($"sub {sp.SubId} · {sp.ActorJson.Length}B")}");
                     break;
                 case MirrorKind.Terrain:
                     var tr = MirrorCodec.ReadTerrain(msg.Payload);

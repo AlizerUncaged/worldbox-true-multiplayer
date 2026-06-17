@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using LiteNetLib;
+using Newtonsoft.Json;
 using UnityEngine;
 using WorldboxMP.Client.Net;
 using WorldboxMP.Shared.Protocol;
@@ -99,11 +100,19 @@ namespace WorldboxMP.Client.Mirror
         public void OnKingSpawned(Actor actor, string assetId)
         {
             if (!Active || !IsKing || ApplyingSpawn || actor == null) return;
-            var t = actor.current_tile;
-            int x = t != null ? t.pos.x : Mathf.RoundToInt(actor.current_position.x);
-            int y = t != null ? t.pos.y : Mathf.RoundToInt(actor.current_position.y);
-            Send(MirrorKind.SpawnUnit, MirrorCodec.Write(new SpawnMsg
-            { KingId = actor.id, AssetId = assetId, X = x, Y = y, Height = actor.position_height }));
+            try
+            {
+                long subId = actor.data.subspecies;
+                string subJson = "";
+                if (subId != 0)
+                {
+                    var sub = World.world.subspecies.get(subId);
+                    if (sub != null) subJson = JsonConvert.SerializeObject(sub.data, JsonHelper.read_settings);
+                }
+                string actorJson = JsonConvert.SerializeObject(actor.data, JsonHelper.read_settings);
+                Send(MirrorKind.SpawnUnit, MirrorCodec.Write(new SpawnMsg { SubId = subId, SubspeciesJson = subJson, ActorJson = actorJson }));
+            }
+            catch (Exception e) { ModLog.Warn("OnKingSpawned serialize failed: " + e.Message); }
         }
 
         public void OnKingTerraform(WorldTile tile, TileType main, TopTileType top)
@@ -194,17 +203,26 @@ namespace WorldboxMP.Client.Mirror
 
         private void ApplySpawn(SpawnMsg m)
         {
-            var tile = World.world?.GetTile(m.X, m.Y);
-            if (tile == null) return;
+            if (string.IsNullOrEmpty(m.ActorJson)) return;
             ApplyingSpawn = true;
             try
             {
-                var a = World.world.units.spawnNewUnit(m.AssetId, tile, false, false, m.Height);
-                if (a != null)
+                // 1) Ensure the subspecies exists first (carries color/genes/base stats).
+                if (m.SubId != 0 && !string.IsNullOrEmpty(m.SubspeciesJson) && World.world.subspecies.get(m.SubId) == null)
                 {
-                    _kingToLocal[m.KingId] = a;
-                    // Warm up the detailed sprite so it doesn't render as a quantum dot.
-                    try { _checkSprite?.Invoke(a, null); } catch { }
+                    var subData = JsonConvert.DeserializeObject<SubspeciesData>(m.SubspeciesJson, JsonHelper.read_settings);
+                    if (subData != null) World.world.subspecies.loadObject(subData);
+                }
+                // 2) Rebuild the exact actor from its data (same id, stats, traits, equipment…).
+                var actorData = JsonConvert.DeserializeObject<ActorData>(m.ActorJson, JsonHelper.read_settings);
+                if (actorData != null)
+                {
+                    var a = World.world.units.loadObject(actorData);
+                    if (a != null)
+                    {
+                        _kingToLocal[actorData.id] = a;
+                        try { _checkSprite?.Invoke(a, null); } catch { }
+                    }
                 }
             }
             catch (Exception e) { ModLog.Warn("ApplySpawn failed: " + e.Message); }

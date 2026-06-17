@@ -8,7 +8,17 @@ namespace WorldboxMP.Shared.Protocol
 
     public struct GodPowerMsg { public string PowerId; public int X; public int Y; }
     public struct TerrainMsg { public int X; public int Y; public string TileId; public string TopId; }
-    public struct SpawnMsg { public long KingId; public string AssetId; public int X; public int Y; public float Height; }
+    /// <summary>
+    /// A full creature spawn. Carries the king actor's serialized ActorData (and its
+    /// SubspeciesData, if any) so the follower can rebuild an identical creature —
+    /// same subspecies, color, stats, speed, genes, traits, equipment, age, and id.
+    /// </summary>
+    public struct SpawnMsg
+    {
+        public long SubId;            // subspecies id referenced by the actor (0 = none)
+        public string SubspeciesJson; // serialized SubspeciesData (empty if none/already known)
+        public string ActorJson;      // serialized ActorData
+    }
     public struct EntityPos { public long KingId; public float X; public float Y; public float H; }
     public struct SimControlMsg { public bool Paused; public string SpeedId; }
     public struct DeathMsg { public long KingId; }
@@ -34,13 +44,13 @@ namespace WorldboxMP.Shared.Protocol
         public static byte[] Write(SpawnMsg m)
         {
             var w = new NetDataWriter();
-            w.Put(m.KingId); w.Put(m.AssetId ?? ""); w.Put(m.X); w.Put(m.Y); w.Put(m.Height);
+            w.Put(m.SubId); w.Put(m.SubspeciesJson ?? ""); w.Put(m.ActorJson ?? "");
             return w.CopyData();
         }
         public static SpawnMsg ReadSpawn(byte[] data)
         {
             var r = new NetDataReader(data);
-            return new SpawnMsg { KingId = r.GetLong(), AssetId = r.GetString(), X = r.GetInt(), Y = r.GetInt(), Height = r.GetFloat() };
+            return new SpawnMsg { SubId = r.GetLong(), SubspeciesJson = r.GetString(), ActorJson = r.GetString() };
         }
 
         public static byte[] Write(TerrainMsg m)
