@@ -19,6 +19,14 @@ namespace WorldboxMP.Server
         {
             ConsoleExtensions.Enable();   // enable ANSI colour on Windows consoles
             Console.Title = "WorldBox Multiplayer Server";
+
+            // Make any crash visible instead of the window vanishing.
+            AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            {
+                Console.WriteLine("\nUNHANDLED EXCEPTION:\n" + e.ExceptionObject);
+                Console.WriteLine("Press Enter to exit."); try { Console.ReadLine(); } catch { }
+            };
+
             string mongo = Environment.GetEnvironmentVariable("WBMP_MONGO") ?? DefaultMongo;
             int port = int.TryParse(Environment.GetEnvironmentVariable("WBMP_PORT"), out var p) ? p : NetProtocol.DefaultPort;
 
@@ -27,15 +35,19 @@ namespace WorldboxMP.Server
             Database db;
             try
             {
-                Console.WriteLine("Connecting to MongoDB...");
+                Console.WriteLine("Connecting to MongoDB (timeout 12s)...");
                 db = new Database(mongo);
                 db.Ping();
                 Console.WriteLine("MongoDB connected.");
+                db.EnsureIndexes();   // non-fatal
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"FATAL: could not connect to MongoDB: {ex.Message}");
-                Console.WriteLine("Set WBMP_MONGO to a reachable connection string and retry.");
+                Console.WriteLine("\nFATAL: could not connect to MongoDB.\n" + ex);
+                Console.WriteLine("\nLikely the Atlas cluster is paused/unreachable, or the connection string/credentials are wrong.");
+                Console.WriteLine("Override with env WBMP_MONGO=<connection string> and retry.");
+                Console.WriteLine("\nPress Enter to exit.");
+                try { Console.ReadLine(); } catch { }
                 return;
             }
 

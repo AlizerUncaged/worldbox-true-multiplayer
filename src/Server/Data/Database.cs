@@ -12,22 +12,30 @@ namespace WorldboxMP.Server.Data
         public Database(string connectionString)
         {
             var url = new MongoUrl(connectionString);
-            var client = new MongoClient(url);
-            // The db name is taken from the connection string (e.g. ".../wmulti").
+            // Fail fast instead of hanging if the cluster is unreachable/paused.
+            var settings = MongoClientSettings.FromUrl(url);
+            settings.ServerSelectionTimeout = TimeSpan.FromSeconds(12);
+            settings.ConnectTimeout = TimeSpan.FromSeconds(12);
+            settings.SocketTimeout = TimeSpan.FromSeconds(12);
+            var client = new MongoClient(settings);
             Db = client.GetDatabase(url.DatabaseName ?? "wmulti");
             Players = Db.GetCollection<PlayerRecord>("players");
-            EnsureIndexes();
         }
 
-        private void EnsureIndexes()
+        /// <summary>Create indexes (non-fatal — logs and continues if it can't).</summary>
+        public void EnsureIndexes()
         {
-            // Unique username (case-insensitive via the lowercased field) and unique id4.
-            Players.Indexes.CreateOne(new CreateIndexModel<PlayerRecord>(
-                Builders<PlayerRecord>.IndexKeys.Ascending(p => p.UsernameLower),
-                new CreateIndexOptions { Unique = true, Name = "uniq_username_lower" }));
-            Players.Indexes.CreateOne(new CreateIndexModel<PlayerRecord>(
-                Builders<PlayerRecord>.IndexKeys.Ascending(p => p.Id4),
-                new CreateIndexOptions { Unique = true, Name = "uniq_id4" }));
+            try
+            {
+                // Unique username (case-insensitive via the lowercased field) and unique id4.
+                Players.Indexes.CreateOne(new CreateIndexModel<PlayerRecord>(
+                    Builders<PlayerRecord>.IndexKeys.Ascending(p => p.UsernameLower),
+                    new CreateIndexOptions { Unique = true, Name = "uniq_username_lower" }));
+                Players.Indexes.CreateOne(new CreateIndexModel<PlayerRecord>(
+                    Builders<PlayerRecord>.IndexKeys.Ascending(p => p.Id4),
+                    new CreateIndexOptions { Unique = true, Name = "uniq_id4" }));
+            }
+            catch (Exception e) { Console.WriteLine("WARN: index setup skipped: " + e.Message); }
         }
 
         /// <summary>Verifies connectivity by pinging the server. Throws on failure.</summary>
