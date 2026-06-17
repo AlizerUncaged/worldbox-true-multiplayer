@@ -50,6 +50,10 @@ namespace WorldboxMP.Client.Mirror
                 var removeFire = AccessTools.Method(typeof(WorldBehaviourActionFire), "removeFire");
                 if (removeFire != null) harmony.Patch(removeFire, postfix: H(nameof(RemoveFire_Postfix)));
 
+                // moveTo is the per-tile step commit — THE event for movement mirroring.
+                var moveTo = AccessTools.Method(typeof(Actor), "moveTo", new[] { typeof(WorldTile) });
+                if (moveTo != null) harmony.Patch(moveTo, postfix: H(nameof(MoveTo_Postfix)));
+
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
@@ -71,6 +75,11 @@ namespace WorldboxMP.Client.Mirror
         private static void CreateNewUnit_Postfix(Actor __result, string pStatsID)
         {
             MirrorManager.Instance?.OnKingSpawned(__result, pStatsID);
+        }
+
+        private static void MoveTo_Postfix(Actor __instance, WorldTile pTileTarget)
+        {
+            MirrorManager.Instance?.OnKingMove(__instance, pTileTarget);
         }
 
         private static void AddTrait_Postfix(Actor __instance, string pTraitID)

@@ -14,6 +14,7 @@ namespace WorldboxMP.Shared.Protocol
     public struct DeathMsg { public long KingId; }
     public struct FireMsg { public int X; public int Y; public bool On; }
     public struct TraitMsg { public long KingId; public string TraitId; public bool Add; }
+    public struct MoveMsg { public long KingId; public int X; public int Y; }
 
     /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
@@ -68,6 +69,23 @@ namespace WorldboxMP.Shared.Protocol
             var list = new List<EntityPos>(n);
             for (int i = 0; i < n; i++)
                 list.Add(new EntityPos { KingId = r.GetLong(), X = r.GetFloat(), Y = r.GetFloat(), H = r.GetFloat() });
+            return list;
+        }
+
+        public static byte[] WriteMoveBatch(List<MoveMsg> list)
+        {
+            var w = new NetDataWriter();
+            w.Put((ushort)list.Count);
+            foreach (var m in list) { w.Put(m.KingId); w.Put(m.X); w.Put(m.Y); }
+            return w.CopyData();
+        }
+        public static List<MoveMsg> ReadMoveBatch(byte[] data)
+        {
+            var r = new NetDataReader(data);
+            int n = r.GetUShort();
+            var list = new List<MoveMsg>(n);
+            for (int i = 0; i < n; i++)
+                list.Add(new MoveMsg { KingId = r.GetLong(), X = r.GetInt(), Y = r.GetInt() });
             return list;
         }
 

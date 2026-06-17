@@ -35,9 +35,12 @@ namespace WorldboxMP.Client.Mirror
         private readonly Dictionary<long, Actor> _kingToLocal = new Dictionary<long, Actor>();
         private static MethodInfo _clickedFinal;
         private static MethodInfo _die;
+        private static MethodInfo _checkSprite;
 
-        private float _streamTimer;
-        private const float StreamInterval = 0.066f;   // ~15 Hz position stream
+        // Movement is event-based: the king's per-tile moveTo commits are collected
+        // here and flushed once per frame (no polling/interval).
+        private readonly List<MoveMsg> _pendingMoves = new List<MoveMsg>(128);
+        private bool _applyingMove;
         private float _snapshotTimer;
         // Periodic full resync is DISABLED (0): each snapshot is a full world reload,
         // which is far too disruptive to run on a timer. The world is sent once on
@@ -53,6 +56,7 @@ namespace WorldboxMP.Client.Mirror
             _clickedFinal = AccessTools.Method(typeof(PlayerControl), "clickedFinal",
                 new[] { typeof(Vector2Int), typeof(GodPower), typeof(bool) });
             _die = AccessTools.Method(typeof(Actor), "die");
+            _checkSprite = AccessTools.Method(typeof(Actor), "checkSpriteToRender");
             GameHooks.Apply(harmony);
 
             var net = NetClient.Instance;
@@ -71,9 +75,17 @@ namespace WorldboxMP.Client.Mirror
         private void Reset()
         {
             _kingToLocal.Clear();
-            ApplyingRemote = ApplyingSpawn = false;
+            _pendingMoves.Clear();
+            ApplyingRemote = ApplyingSpawn = _applyingMove = false;
             _lastPaused = SafePaused();
             _snapshotTimer = 0f;
+        }
+
+        /// <summary>King: an actor committed to step to a tile → queue it for this frame's batch.</summary>
+        public void OnKingMove(Actor actor, WorldTile target)
+        {
+            if (!Active || !IsKing || _applyingMove || actor == null || target == null) return;
+            _pendingMoves.Add(new MoveMsg { KingId = actor.id, X = target.pos.x, Y = target.pos.y });
         }
 
         // ── Local action capture (from hooks) ───────────────────────────────
@@ -135,8 +147,8 @@ namespace WorldboxMP.Client.Mirror
                 case MirrorKind.SpawnUnit:
                     if (IsFollower) ApplySpawn(MirrorCodec.ReadSpawn(msg.Payload));
                     break;
-                case MirrorKind.EntityState:
-                    if (IsFollower) ApplyEntityState(MirrorCodec.ReadEntityState(msg.Payload));
+                case MirrorKind.Move:
+                    if (IsFollower) ApplyMoveBatch(MirrorCodec.ReadMoveBatch(msg.Payload));
                     break;
                 case MirrorKind.Death:
                     if (IsFollower) ApplyDeath(MirrorCodec.ReadDeath(msg.Payload));
@@ -188,28 +200,35 @@ namespace WorldboxMP.Client.Mirror
             try
             {
                 var a = World.world.units.spawnNewUnit(m.AssetId, tile, false, false, m.Height);
-                if (a != null) _kingToLocal[m.KingId] = a;
+                if (a != null)
+                {
+                    _kingToLocal[m.KingId] = a;
+                    // Warm up the detailed sprite so it doesn't render as a quantum dot.
+                    try { _checkSprite?.Invoke(a, null); } catch { }
+                }
             }
             catch (Exception e) { ModLog.Warn("ApplySpawn failed: " + e.Message); }
             finally { ApplyingSpawn = false; }
         }
 
-        private void ApplyEntityState(List<EntityPos> list)
+        private void ApplyMoveBatch(List<MoveMsg> list)
         {
-            foreach (var e in list)
+            _applyingMove = true;   // so the follower's own moveTo postfix doesn't echo
+            try
             {
-                var a = Resolve(e.KingId);
-                if (a == null) continue;
-                var target = new Vector2(e.X, e.Y);
-                // Feed the game's own smooth movement: it interpolates current → next_step.
-                a.next_step_position = target;
-                a.position_height = e.H;
-                // Snap on large jumps (teleports / first sight) to avoid long glides.
-                if ((a.current_position - target).sqrMagnitude > 9f)
-                    a.current_position = target;
-                var tile = World.world?.GetTile(Mathf.RoundToInt(e.X), Mathf.RoundToInt(e.Y));
-                if (tile != null) a.current_tile = tile;
+                foreach (var m in list)
+                {
+                    var a = Resolve(m.KingId);
+                    if (a == null) continue;
+                    var tile = World.world?.GetTile(m.X, m.Y);
+                    if (tile == null) continue;
+                    // Replay the exact step: the game registers the actor as moving,
+                    // sets next_step_position, and its own u10_checkSmoothMovement walks
+                    // it there (smooth + animated + keeps current_tile valid for detailed LOD).
+                    try { a.moveTo(tile); } catch { }
+                }
             }
+            finally { _applyingMove = false; }
         }
 
         private void ApplyDeath(DeathMsg m)
@@ -271,32 +290,18 @@ namespace WorldboxMP.Client.Mirror
                 Send(MirrorKind.SimControl, MirrorCodec.Write(new SimControlMsg { Paused = paused, SpeedId = speed }));
             }
 
-            _streamTimer += dt;
-            if (_streamTimer >= StreamInterval) { _streamTimer = 0f; StreamEntities(); }
+            // Flush this frame's movement-step events (event-based, not polled).
+            if (_pendingMoves.Count > 0)
+            {
+                Send(MirrorKind.Move, MirrorCodec.WriteMoveBatch(_pendingMoves));
+                _pendingMoves.Clear();
+            }
 
             if (PeriodicSnapshotSeconds > 0f)
             {
                 _snapshotTimer += dt;
                 if (_snapshotTimer >= PeriodicSnapshotSeconds) { _snapshotTimer = 0f; ForceSnapshotToAll(); }
             }
-        }
-
-        private void StreamEntities()
-        {
-            var units = World.world?.units;
-            if (units == null) return;
-            var list = new List<EntityPos>(256);
-            try
-            {
-                foreach (var a in units.getSimpleList())
-                {
-                    if (a == null) continue;
-                    list.Add(new EntityPos { KingId = a.id, X = a.current_position.x, Y = a.current_position.y, H = a.position_height });
-                    if (list.Count >= 500) break;
-                }
-            }
-            catch (Exception e) { ModLog.Warn("StreamEntities failed: " + e.Message); return; }
-            if (list.Count > 0) Send(MirrorKind.EntityState, MirrorCodec.WriteEntityState(list), DeliveryMethod.Sequenced);
         }
 
         // ── Snapshots ───────────────────────────────────────────────────────

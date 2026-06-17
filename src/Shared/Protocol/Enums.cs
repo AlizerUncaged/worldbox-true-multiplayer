@@ -53,5 +53,12 @@ namespace WorldboxMP.Shared.Protocol
 
         /// <summary>A unit gained/lost a trait (Actor.addTrait/removeTrait).</summary>
         Trait = 7,
+
+        /// <summary>
+        /// Per-tile movement step(s): the king's actor committed to walk to a tile
+        /// (Actor.moveTo). Batched per frame. Followers replay via moveTo so the game
+        /// animates the walk (no polling, no snapping). Replaces the old EntityState.
+        /// </summary>
+        Move = 8,
     }
 }
