@@ -40,9 +40,13 @@ namespace WorldboxMP.Client.UI
             _created = true;
         }
 
+        /// <summary>Create the window now (hidden) so the first real Open() is a clean show, not a create+show race.</summary>
+        public static void Prewarm() => Create();
+
         public static void Open()
         {
             Create();
+            if (Instance != null) Instance._showSettings = false;   // main buttons always show the normal panels
             ScrollWindow.showWindow(WindowId);
             if (Instance != null) { Instance.Refresh(); if (NetClient.Instance.LoggedIn) NetClient.Instance.RequestRoomList(); }
         }

@@ -28,7 +28,13 @@ namespace WorldboxMP.Client.Mirror
                 var clickedFinal = AccessTools.Method(typeof(PlayerControl), "clickedFinal",
                     new[] { typeof(Vector2Int), typeof(GodPower), typeof(bool) });
                 if (clickedFinal != null)
-                    harmony.Patch(clickedFinal, prefix: H(nameof(ClickedFinal_Prefix)));
+                    harmony.Patch(clickedFinal, prefix: H(nameof(ClickedFinal_Prefix)), postfix: H(nameof(ClickedFinal_Postfix)));
+
+                // Drops / disasters (meteors, rain, loot…). Guarded so god-power drops
+                // (which replay via clickedFinal on followers) don't double.
+                var dropSpawn = AccessTools.Method(typeof(DropManager), "spawn",
+                    new[] { typeof(WorldTile), typeof(string), typeof(float), typeof(float), typeof(long) });
+                if (dropSpawn != null) harmony.Patch(dropSpawn, postfix: H(nameof(DropSpawn_Postfix)));
 
                 // createNewUnit is the core spawn funnel — catches player spawns AND
                 // births/reproduction/mutations (which all route through it).
@@ -139,7 +145,9 @@ namespace WorldboxMP.Client.Mirror
                 if (instantiate != null && _preloadOps != null)
                     harmony.Patch(instantiate, prefix: H(nameof(InstantiateWindow_Prefix)));
 
-                ModLog.Info("Mirror game hooks applied.");
+                int patched = 0;
+                foreach (var _ in harmony.GetPatchedMethods()) patched++;
+                ModLog.Info($"Mirror game hooks applied: {patched} methods patched (watch for any 'hook MISS' / 'PatchCreate: no' warnings above).");
             }
             catch (Exception e) { ModLog.Error("Failed to apply game hooks: " + e); }
         }
@@ -198,9 +206,21 @@ namespace WorldboxMP.Client.Mirror
         private static bool ClickedFinal_Prefix(Vector2Int pPos, GodPower pPower)
         {
             var m = MirrorManager.Instance;
+            if (m != null) m.InGodPower = true;   // suppress god-power-driven drop broadcasts
             if (m == null || !m.Active) return true;
             if (m.ApplyingRemote) return true;
             return m.OnLocalGodPower(pPos, pPower);
+        }
+
+        private static void ClickedFinal_Postfix()
+        {
+            if (MirrorManager.Instance != null) MirrorManager.Instance.InGodPower = false;
+        }
+
+        private static void DropSpawn_Postfix(object[] __args)
+        {
+            if (__args != null && __args.Length >= 2 && __args[0] is WorldTile t && __args[1] is string id)
+                MirrorManager.Instance?.OnKingDisaster(t, id);
         }
 
         private static void CreateNewUnit_Postfix(Actor __result, string pStatsID)

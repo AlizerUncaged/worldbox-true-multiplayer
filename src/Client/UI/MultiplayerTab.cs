@@ -62,6 +62,9 @@ namespace WorldboxMP.Client.UI
 
                 Subscribe();
                 RefreshButtons();
+                // Build the manager window now (hidden) so the first click is a clean
+                // show instead of a create+show race that flashes/transitions out.
+                try { MultiplayerWindow.Prewarm(); } catch (Exception e) { ModLog.Warn("Prewarm failed: " + e.Message); }
                 _created = true;
                 ModLog.Info("Multiplayer tab created.");
                 return true;

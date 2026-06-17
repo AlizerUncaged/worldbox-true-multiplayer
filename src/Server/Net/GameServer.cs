@@ -106,6 +106,22 @@ namespace WorldboxMP.Server.Net
 
         private Session SessionOf(NetPeer peer) => _sessions.TryGetValue(peer, out var s) ? s : null;
 
+        /// <summary>A reconnect of the same account replaces its old session — keep it simple, no dup sessions.</summary>
+        private void DropOldSessions(Session keep)
+        {
+            var stale = new List<NetPeer>();
+            foreach (var kv in _sessions)
+                if (kv.Value != keep && kv.Value.Id4 == keep.Id4) stale.Add(kv.Key);
+            foreach (var peer in stale)
+            {
+                var old = _sessions[peer];
+                _rooms.LeaveRoom(old);
+                _sessions.Remove(peer);
+                try { peer.Disconnect(); } catch { }
+                Log($"Replaced old session of {keep.Username}.");
+            }
+        }
+
         private bool RequireAuth(Session s)
         {
             if (s != null && s.IsAuthenticated) return true;
@@ -118,7 +134,7 @@ namespace WorldboxMP.Server.Net
         {
             var s = SessionOf(peer); if (s == null) return;
             var res = _auth.Register(req.Username, req.Password);
-            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; LogC($"Registered: {s.Username} (id4 {s.Id4}).", $"{Ok("registered")} {Usr(s.Username)} {Dim("id4 " + s.Id4)}"); }
+            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; DropOldSessions(s); LogC($"Registered: {s.Username} (id4 {s.Id4}).", $"{Ok("registered")} {Usr(s.Username)} {Dim("id4 " + s.Id4)}"); }
             peer.Send(_proc, MakeAuth(res));
         }
 
@@ -126,7 +142,7 @@ namespace WorldboxMP.Server.Net
         {
             var s = SessionOf(peer); if (s == null) return;
             var res = _auth.Login(req.Username, req.Password);
-            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; LogC($"Login: {s.Username}.", $"{Ok("login")} {Usr(s.Username)}"); }
+            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; DropOldSessions(s); LogC($"Login: {s.Username}.", $"{Ok("login")} {Usr(s.Username)}"); }
             peer.Send(_proc, MakeAuth(res));
         }
 

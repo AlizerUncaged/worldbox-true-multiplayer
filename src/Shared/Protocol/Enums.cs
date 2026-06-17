@@ -100,6 +100,9 @@ namespace WorldboxMP.Shared.Protocol
 
         /// <summary>A war ended (WarManager.endWar) — war id + winner.</summary>
         WarEnd = 20,
+
+        /// <summary>A drop/disaster spawned (DropManager.spawn) — tile + drop id. Non-god-power only.</summary>
+        Disaster = 21,
     }
 }
 

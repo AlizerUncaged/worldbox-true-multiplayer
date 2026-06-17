@@ -156,9 +156,14 @@ namespace WorldboxMP.Client.Net
         /// <summary>Change target endpoint and reconnect (used by the settings dialog).</summary>
         public void Reconnect(string host, int port)
         {
-            Disconnect();
             _host = host; _port = port;
-            Connect(host, port);
+            try { _net.Stop(); } catch { }          // fully tear down (DisconnectAll+reconnect on one manager is unreliable)
+            _server = null;
+            ResetSession();
+            SetState(ConnState.Disconnected);        // lets dev auto-login re-arm
+            _net.Start();
+            SetState(ConnState.Connecting);
+            _server = _net.Connect(_host, _port, NetProtocol.ConnectKey);
         }
 
         public string Host => _host;

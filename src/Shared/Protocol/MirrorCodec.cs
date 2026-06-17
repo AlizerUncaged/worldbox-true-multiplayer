@@ -37,6 +37,7 @@ namespace WorldboxMP.Shared.Protocol
     public struct CaptureMsg { public long CityId; public long KingdomId; public bool Captured; public bool Rebellion; }
     public struct KingdomPropMsg { public long KingdomId; public byte Prop; public long Value; }
     public struct WarEndMsg { public long WarId; public byte Winner; }
+    public struct DisasterMsg { public int X; public int Y; public string DropId; }
 
     /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
@@ -109,6 +110,15 @@ namespace WorldboxMP.Shared.Protocol
             for (int i = 0; i < n; i++)
                 list.Add(new MoveMsg { KingId = r.GetLong(), X = r.GetInt(), Y = r.GetInt() });
             return list;
+        }
+
+        public static byte[] Write(DisasterMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.X); w.Put(m.Y); w.Put(m.DropId ?? ""); return w.CopyData();
+        }
+        public static DisasterMsg ReadDisaster(byte[] data)
+        {
+            var r = new NetDataReader(data); return new DisasterMsg { X = r.GetInt(), Y = r.GetInt(), DropId = r.GetString() };
         }
 
         public static byte[] Write(ObjectRemoveMsg m)

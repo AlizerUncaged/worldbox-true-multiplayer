@@ -32,6 +32,8 @@ namespace WorldboxMP.Client.Mirror
         // Flags read by the Harmony hooks.
         public bool ApplyingRemote;
         public bool ApplyingSpawn;
+        public bool InGodPower;   // set while a god power runs, so its drops aren't double-mirrored
+        private bool _applyingDisaster;
 
         private readonly Dictionary<long, Actor> _kingToLocal = new Dictionary<long, Actor>();
         private static MethodInfo _clickedFinal;
@@ -175,6 +177,12 @@ namespace WorldboxMP.Client.Mirror
         {
             if (!Active || !IsKing || tile == null) return;
             Send(MirrorKind.Fire, MirrorCodec.Write(new FireMsg { X = tile.pos.x, Y = tile.pos.y, On = on }));
+        }
+
+        public void OnKingDisaster(WorldTile tile, string dropId)
+        {
+            if (!Active || !IsKing || InGodPower || ApplyingRemote || _applyingDisaster || tile == null || string.IsNullOrEmpty(dropId)) return;
+            Send(MirrorKind.Disaster, MirrorCodec.Write(new DisasterMsg { X = tile.pos.x, Y = tile.pos.y, DropId = dropId }));
         }
 
         public void OnKingTrait(Actor actor, string traitId, bool add)
@@ -375,6 +383,9 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.WarEnd:
                     if (IsFollower) ApplyWarEnd(MirrorCodec.ReadWarEnd(msg.Payload));
+                    break;
+                case MirrorKind.Disaster:
+                    if (IsFollower) ApplyDisaster(MirrorCodec.ReadDisaster(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -604,6 +615,16 @@ namespace WorldboxMP.Client.Mirror
             }
             catch (Exception e) { ModLog.Warn("ApplyKingdomProp failed: " + e.Message); }
             finally { _applyingKProp = false; }
+        }
+
+        private void ApplyDisaster(DisasterMsg m)
+        {
+            var tile = World.world?.GetTile(m.X, m.Y);
+            if (tile == null) return;
+            _applyingDisaster = true;
+            try { World.world.drop_manager.spawn(tile, m.DropId); }
+            catch (Exception e) { ModLog.Warn("ApplyDisaster failed: " + e.Message); }
+            finally { _applyingDisaster = false; }
         }
 
         private void ApplyWarEnd(WarEndMsg m)
