@@ -45,7 +45,7 @@ namespace WorldboxMP.Client
             MultiplayerTab.TryCreate();
 
             if (Input.GetKeyDown(KeyCode.F9))
-                MultiplayerWindow.Instance?.Toggle();
+                MultiplayerWindow.Toggle();
         }
 
         private void OnApplicationQuit() => NetClient.Instance?.Stop();

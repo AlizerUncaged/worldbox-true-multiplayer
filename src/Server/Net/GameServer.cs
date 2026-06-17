@@ -206,14 +206,16 @@ namespace WorldboxMP.Server.Net
             // King-authoritative routing:
             //  - From the king  → authoritative event, fan out to everyone else.
             //  - From a player   → an intent, forward only to the king to execute.
+            var method = (MirrorKind)msg.Kind == MirrorKind.EntityState
+                ? DeliveryMethod.Sequenced : DeliveryMethod.ReliableOrdered;
             if (room.KingId4 == s.Id4)
             {
-                room.BroadcastExcept(_proc, s.Id4, msg);
+                room.BroadcastExcept(_proc, s.Id4, msg, method);
             }
             else
             {
                 var king = room.GetKing();
-                king?.Session.Peer.Send(_proc, msg);
+                king?.Session.Peer.Send(_proc, msg, method);
             }
         }
 
@@ -233,6 +235,11 @@ namespace WorldboxMP.Server.Net
                     LogC($"[{room}] {s.Username} spawned '{sp.AssetId}' at ({sp.X},{sp.Y}) #{sp.KingId}",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("spawned")} {Val(sp.AssetId)} {Dim($"at ({sp.X},{sp.Y}) #{sp.KingId}")}");
                     break;
+                case MirrorKind.Terrain:
+                    var tr = MirrorCodec.ReadTerrain(msg.Payload);
+                    LogC($"[{room}] {s.Username} terrain '{tr.TileId}' at ({tr.X},{tr.Y})",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("terrain")} {Val(tr.TileId)} {Dim($"at ({tr.X},{tr.Y})")}");
+                    break;
                 case MirrorKind.SimControl:
                     var sc = MirrorCodec.ReadSimControl(msg.Payload);
                     LogC($"[{room}] {s.Username} sim paused={sc.Paused} speed={sc.SpeedId}",
@@ -247,6 +254,14 @@ namespace WorldboxMP.Server.Net
             var s = SessionOf(peer); if (s == null || s.CurrentRoom == null) return;
             // Only the king ships snapshots; forward to the single target joiner.
             if (s.CurrentRoom.KingId4 != s.Id4) return;
+            if (string.IsNullOrEmpty(snap.TargetId4))
+            {
+                // Periodic / on-demand resync → everyone except the king.
+                s.CurrentRoom.BroadcastExcept(_proc, s.Id4, snap, DeliveryMethod.ReliableOrdered);
+                LogC($"[{s.CurrentRoom.ShareableId}] {s.Username} broadcast world resync ({snap.Data.Length} bytes)",
+                     $"{Dim("[" + s.CurrentRoom.ShareableId + "]")} {Usr(s.Username)} {Act("resync")} {Dim(snap.Data.Length + " bytes → all")}");
+                return;
+            }
             var target = s.CurrentRoom.Get(snap.TargetId4);
             if (target != null)
             {

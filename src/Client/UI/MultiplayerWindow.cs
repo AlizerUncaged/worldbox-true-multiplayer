@@ -1,5 +1,5 @@
 using System;
-using NeoModLoader.General;              // WindowCreator
+using NeoModLoader.General.UI.Window;   // SingleAutoLayoutWindow
 using UnityEngine;
 using UnityEngine.UI;
 using WorldboxMP.Client.Net;
@@ -8,25 +8,18 @@ using WorldboxMP.Shared.Protocol;
 namespace WorldboxMP.Client.UI
 {
     /// <summary>
-    /// The multiplayer manager window. Hosted inside WorldBox's own window frame
-    /// (cloned via NML's WindowCreator) so it matches the native look — ornate
-    /// frame, title bar, close button, scroll area — with our sections built into
-    /// its content area. Falls back to a self-drawn panel if the native frame
-    /// can't be created. Sections (login / lobby / room / settings) are built once
-    /// so inputs keep their content; only labels and lists refresh on events.
+    /// The multiplayer manager window. Subclasses NML's SingleAutoLayoutWindow so it
+    /// uses WorldBox's native window frame, title bar, close button and scroll/content
+    /// layout. Our sections (login / lobby / room / settings) are built into the
+    /// content area; only labels and lists refresh on events.
     /// </summary>
-    public class MultiplayerWindow : MonoBehaviour
+    public class MultiplayerWindow : SingleAutoLayoutWindow<MultiplayerWindow>
     {
         public const string WindowId = "wbmp_main";
-        public static MultiplayerWindow Instance { get; private set; }
+        private static bool _created;
 
         private NetClient Net => NetClient.Instance;
-
-        private bool _built;
-        private bool _native;
-        private ScrollWindow _window;       // native frame (when _native)
-        private GameObject _root;           // fallback panel root (when !_native)
-        private Transform _host;            // where sections live (native content or fallback root)
+        private Transform _host;
 
         private Text _statusText, _msgText;
         private GameObject _loginPanel, _lobbyPanel, _roomPanel, _settingsPanel;
@@ -37,128 +30,60 @@ namespace WorldboxMP.Client.UI
         private GameObject _roomListContainer, _rosterContainer, _logContainer;
         private bool _showSettings;
 
-        public static void Ensure()
+        // ── Static entry points (create lazily, then show) ──────────────────
+        public static void Ensure() { /* creation is lazy on first Open */ }
+
+        private static void Create()
         {
-            if (Instance != null) return;
-            var go = new GameObject("WBMP_Window");
-            DontDestroyOnLoad(go);
-            Instance = go.AddComponent<MultiplayerWindow>();
-            // Built lazily on first Show (needs the in-game UI / CanvasMain to exist).
+            if (_created) return;
+            CreateWindow(WindowId, "WorldBox Multiplayer");
+            _created = true;
         }
 
-        public void Toggle()
+        public static void Open()
         {
-            EnsureBuilt();
-            if (_native) { if (ScrollWindow.isCurrentWindow(WindowId)) Hide(); else Show(); }
-            else { if (_root != null && _root.activeSelf) Hide(); else Show(); }
+            Create();
+            ScrollWindow.showWindow(WindowId);
+            if (Instance != null) { Instance.Refresh(); if (NetClient.Instance.LoggedIn) NetClient.Instance.RequestRoomList(); }
         }
 
-        public void Show()
+        public static void OpenSettings()
         {
-            EnsureBuilt();
-            if (_native) ScrollWindow.showWindow(WindowId);
-            else _root?.SetActive(true);
-            Refresh();
-            if (Net.LoggedIn) Net.RequestRoomList();
+            Create();
+            if (Instance != null) Instance._showSettings = true;
+            ScrollWindow.showWindow(WindowId);
+            Instance?.Refresh();
         }
 
-        public void Hide()
+        public static void Toggle()
         {
-            if (_native) { try { _window?.clickHide("right"); } catch { } }
-            else _root?.SetActive(false);
+            Create();
+            if (ScrollWindow.isCurrentWindow(WindowId)) { try { Instance?.ScrollWindowComponent.clickHide("right"); } catch { } }
+            else { ScrollWindow.showWindow(WindowId); Instance?.Refresh(); }
         }
 
-        public void ShowSettings() { _showSettings = true; Show(); }
-
-        // ── Build (lazy, once) ───────────────────────────────────────────────
-        private void EnsureBuilt()
+        // ── Build (NML calls Init once during CreateWindow) ─────────────────
+        protected override void Init()
         {
-            if (_built) return;
-            _built = true;
-            try
-            {
-                BuildNative();
-                _native = true;
-                ModLog.Info("Manager window built (native frame).");
-            }
-            catch (Exception e)
-            {
-                ModLog.Warn("Native window unavailable, using fallback panel: " + e.Message);
-                BuildFallback();
-                _native = false;
-            }
-            BuildSections();
-            WireNet();
-        }
+            _host = ContentTransform;
 
-        private void BuildNative()
-        {
-            _window = WindowCreator.CreateEmptyWindow(WindowId, "WorldBox Multiplayer");
-            if (_window == null) throw new Exception("CreateEmptyWindow returned null");
-            _host = FindContent(_window);
-            if (_host == null) throw new Exception("window content not found");
+            // Let sections fill the content width inside the frame.
+            var lg = GetLayoutGroup();
+            lg.childControlWidth = true; lg.childForceExpandWidth = true;
+            lg.childControlHeight = true; lg.childForceExpandHeight = false;
+            lg.spacing = 6; lg.padding = new RectOffset(6, 6, 8, 8);
 
-            // Give the content a vertical layout that grows with its children.
-            var vlg = _host.gameObject.GetComponent<VerticalLayoutGroup>() ?? _host.gameObject.AddComponent<VerticalLayoutGroup>();
-            vlg.spacing = 6;
-            vlg.padding = new RectOffset(6, 6, 6, 6);
-            vlg.childControlWidth = true; vlg.childForceExpandWidth = true;
-            vlg.childControlHeight = true; vlg.childForceExpandHeight = false;
-            vlg.childAlignment = TextAnchor.UpperCenter;
-            var fit = _host.gameObject.GetComponent<ContentSizeFitter>() ?? _host.gameObject.AddComponent<ContentSizeFitter>();
-            fit.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-        }
-
-        private static Transform FindContent(ScrollWindow w)
-        {
-            var t = w.transform.Find("Background/Scroll View/Viewport/Content");
-            if (t != null) return t;
-            var sr = w.GetComponentInChildren<ScrollRect>();
-            return sr != null ? sr.content : null;
-        }
-
-        // Self-drawn panel used only if the native frame can't be created.
-        private void BuildFallback()
-        {
-            var canvasGo = new GameObject("WBMP_Canvas");
-            canvasGo.transform.SetParent(transform, false);
-            var canvas = canvasGo.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.sortingOrder = 30000;
-            var scaler = canvasGo.AddComponent<CanvasScaler>();
-            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920, 1080);
-            canvasGo.AddComponent<GraphicRaycaster>();
-
-            var rootImg = UiKit.MakePanel("Root", canvasGo.transform, UiKit.PanelBg);
-            _root = rootImg.gameObject;
-            var rt = rootImg.rectTransform;
-            rt.sizeDelta = new Vector2(380, 560);
-            rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
-            rt.anchoredPosition = Vector2.zero;
-            var col = _root.AddComponent<VerticalLayoutGroup>();
-            col.spacing = 6; col.padding = new RectOffset(8, 8, 8, 10);
-            col.childControlWidth = true; col.childForceExpandWidth = true;
-            col.childControlHeight = true; col.childForceExpandHeight = false;
-            UiKit.MakeButton("Close", _root.transform, "Close", Hide, UiKit.ButtonRed, 13);
-            _host = _root.transform;
-        }
-
-        private void BuildSections()
-        {
-            // Header: status + a settings toggle.
-            var hdr = UiKit.MakeRow("Hdr", _host, 4f);
-            _statusText = UiKit.MakeText("Status", hdr.transform, "", 12, TextAnchor.MiddleLeft);
-            var gear = UiKit.MakeButton("Gear", hdr.transform, "⚙", () => { _showSettings = !_showSettings; Refresh(); }, UiKit.ButtonGrey, 13);
-            UiKit.SetHeight(gear.gameObject, 26f); gear.GetComponent<LayoutElement>().preferredWidth = 34;
-
-            _msgText = UiKit.MakeText("Msg", _host, "", 12, TextAnchor.MiddleCenter, FontStyle.Italic);
-            UiKit.SetHeight(_msgText.gameObject, 18f);
+            _statusText = UiKit.MakeText("Status", _host, "", 12, TextAnchor.MiddleCenter, FontStyle.Bold);
+            UiKit.SetHeight(_statusText.gameObject, 18f);
+            _msgText = UiKit.MakeText("Msg", _host, "", 11, TextAnchor.MiddleCenter, FontStyle.Italic);
+            UiKit.SetHeight(_msgText.gameObject, 16f);
 
             BuildLoginPanel();
             BuildLobbyPanel();
             BuildRoomPanel();
             BuildSettingsPanel();
+            WireNet();
+            Refresh();
         }
 
         private void BuildLoginPanel()
@@ -173,7 +98,7 @@ namespace WorldboxMP.Client.UI
             UiKit.MakeButton("RegBtn", row.transform, "Register",
                 () => Net.Register(_userField.text, _passField.text), UiKit.ButtonGrey);
             UiKit.MakeText("hint", _loginPanel.transform,
-                "Register: pick a username + password. Username must be unique.", 11, TextAnchor.MiddleLeft, FontStyle.Italic);
+                "Register: pick a username + password.", 11, TextAnchor.MiddleLeft, FontStyle.Italic);
         }
 
         private void BuildLobbyPanel()
@@ -189,7 +114,7 @@ namespace WorldboxMP.Client.UI
             var togBg = togGo.AddComponent<Image>(); togBg.color = UiKit.InputBg;
             _unlistedToggle.targetGraphic = togBg;
             UiKit.SetHeight(togGo, 24f);
-            UiKit.MakeText("TogLbl", trow.transform, "Unlisted (hidden from list)", 12);
+            UiKit.MakeText("TogLbl", trow.transform, "Unlisted", 12);
             UiKit.MakeButton("CreateBtn", _lobbyPanel.transform, "Create Room", () =>
                 Net.CreateRoom(_roomNameField.text, _roomPassField.text,
                     _unlistedToggle.isOn ? RoomVisibility.Unlisted : RoomVisibility.Public), UiKit.ButtonRed);
@@ -211,8 +136,9 @@ namespace WorldboxMP.Client.UI
         {
             _roomPanel = UiKit.MakeColumn("RoomP", _host, null);
             var brow = UiKit.MakeRow("RTopRow", _roomPanel.transform);
-            UiKit.MakeButton("Logs", brow.transform, "Server Logs", () => Net.RequestLogs(), UiKit.ButtonGrey);
-            UiKit.MakeButton("Leave", brow.transform, "Leave Room", () => Net.LeaveRoom(), UiKit.ButtonRed);
+            UiKit.MakeButton("Logs", brow.transform, "Logs", () => Net.RequestLogs(), UiKit.ButtonGrey);
+            UiKit.MakeButton("Resync", brow.transform, "Resync", () => Mirror.MirrorManager.Instance?.ForceSnapshotToAll(), UiKit.ButtonGrey);
+            UiKit.MakeButton("Leave", brow.transform, "Leave", () => Net.LeaveRoom(), UiKit.ButtonRed);
             UiKit.MakeText("plh", _roomPanel.transform, "Players", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
             _rosterContainer = UiKit.MakeColumn("Roster", _roomPanel.transform, null, 3f, new RectOffset(0, 0, 0, 0));
             UiKit.MakeText("lgh", _roomPanel.transform, "Logs", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
@@ -238,8 +164,7 @@ namespace WorldboxMP.Client.UI
                 Msg($"Reconnecting to {host}:{port}...");
                 Refresh();
             }, UiKit.ButtonRed);
-            UiKit.MakeText("shint", _settingsPanel.transform, "Default port is 40441. Settings are saved locally.",
-                11, TextAnchor.MiddleLeft, FontStyle.Italic);
+            var back = UiKit.MakeButton("BackBtn", _settingsPanel.transform, "Back", () => { _showSettings = false; Refresh(); }, UiKit.ButtonGrey);
         }
 
         // ── Net events ──────────────────────────────────────────────────────
@@ -259,7 +184,7 @@ namespace WorldboxMP.Client.UI
         // ── Refresh ─────────────────────────────────────────────────────────
         private void Refresh()
         {
-            if (!_built || _statusText == null) return;
+            if (_statusText == null) return;
             string conn = Net.State == ConnState.Connected ? "Connected" :
                           Net.State == ConnState.Connecting ? "Connecting..." : "Disconnected";
             string who = Net.LoggedIn ? $" | {Net.Username}" : "";
@@ -309,13 +234,13 @@ namespace WorldboxMP.Client.UI
                 if (Net.IsAdmin && !isMe)
                 {
                     UiKit.MakeButton("kick", row.transform, "Kick", () => Net.Kick(p.Id4), UiKit.ButtonRed, 11)
-                        .GetComponent<LayoutElement>().preferredWidth = 50;
+                        .GetComponent<LayoutElement>().preferredWidth = 46;
                     if (Net.IsKing && (RoomRole)p.Role == RoomRole.Player)
-                        UiKit.MakeButton("prom", row.transform, "Promote", () => Net.Promote(p.Id4), UiKit.ButtonGrey, 11)
-                            .GetComponent<LayoutElement>().preferredWidth = 64;
+                        UiKit.MakeButton("prom", row.transform, "+", () => Net.Promote(p.Id4), UiKit.ButtonGrey, 11)
+                            .GetComponent<LayoutElement>().preferredWidth = 28;
                     if (Net.IsKing && (RoomRole)p.Role == RoomRole.Admin)
-                        UiKit.MakeButton("dem", row.transform, "Demote", () => Net.Demote(p.Id4), UiKit.ButtonGrey, 11)
-                            .GetComponent<LayoutElement>().preferredWidth = 64;
+                        UiKit.MakeButton("dem", row.transform, "-", () => Net.Demote(p.Id4), UiKit.ButtonGrey, 11)
+                            .GetComponent<LayoutElement>().preferredWidth = 28;
                 }
             }
         }

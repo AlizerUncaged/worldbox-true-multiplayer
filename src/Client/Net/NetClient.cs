@@ -114,8 +114,8 @@ namespace WorldboxMP.Client.Net
         public void Demote(string id4) => Send(new ModerationRequest { Action = ModerationRequest.ACTION_DEMOTE, TargetId4 = id4 });
         public void SendCursor(float x, float y, bool pressed) =>
             Send(new CursorUpdate { X = x, Y = y, Pressed = pressed }, DeliveryMethod.Sequenced);
-        public void SendMirror(MirrorKind kind, byte[] payload) =>
-            Send(new MirrorMessage { Kind = (byte)kind, Payload = payload ?? Array.Empty<byte>() });
+        public void SendMirror(MirrorKind kind, byte[] payload, DeliveryMethod method = DeliveryMethod.ReliableOrdered) =>
+            Send(new MirrorMessage { Kind = (byte)kind, Payload = payload ?? Array.Empty<byte>() }, method);
 
         private void Send<T>(T packet, DeliveryMethod method = DeliveryMethod.ReliableOrdered) where T : INetSerializable
         {

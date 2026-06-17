@@ -8,8 +8,13 @@ namespace WorldboxMP.Client.Mirror
     /// Harmony patches that drive mirroring:
     ///  • PlayerControl.clickedFinal  — capture/defer local god-power actions.
     ///  • ActorManager.spawnNewUnit   — king broadcasts authoritative spawns.
-    ///  • Actor.b6_updateAI / u10_checkSmoothMovement — suppress follower simulation.
-    /// All are patched manually because clickedFinal is internal.
+    ///  • MapAction.terraformTile     — king broadcasts terrain/biome/block changes.
+    ///  • Actor.b6_updateAI           — suppress follower AI *decisions* only.
+    ///
+    /// We deliberately do NOT suppress movement/animation/render on followers — the
+    /// game keeps interpolating each actor toward its <c>next_step_position</c> (which
+    /// we feed from the king's stream), so creatures move smoothly and render at full
+    /// detail instead of as their zoomed-out sprites.
     /// </summary>
     public static class GameHooks
     {
@@ -26,11 +31,12 @@ namespace WorldboxMP.Client.Mirror
                 if (spawn != null)
                     harmony.Patch(spawn, postfix: H(nameof(SpawnNewUnit_Postfix)));
 
-                var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
-                if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressOnFollower_Prefix)));
+                var terraform = AccessTools.Method(typeof(MapAction), "terraformTile");
+                if (terraform != null)
+                    harmony.Patch(terraform, postfix: H(nameof(Terraform_Postfix)));
 
-                var move = AccessTools.Method(typeof(Actor), "u10_checkSmoothMovement");
-                if (move != null) harmony.Patch(move, prefix: H(nameof(SuppressOnFollower_Prefix)));
+                var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
+                if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
                 ModLog.Info("Mirror game hooks applied.");
             }
@@ -39,13 +45,12 @@ namespace WorldboxMP.Client.Mirror
 
         private static HarmonyMethod H(string name) => new HarmonyMethod(typeof(GameHooks), name);
 
-        // Returns false to skip the original method.
         private static bool ClickedFinal_Prefix(Vector2Int pPos, GodPower pPower)
         {
             var m = MirrorManager.Instance;
-            if (m == null || !m.Active) return true;     // singleplayer → normal
-            if (m.ApplyingRemote) return true;           // applying a remote action → run it
-            return m.OnLocalGodPower(pPos, pPower);      // send; king applies, follower defers
+            if (m == null || !m.Active) return true;
+            if (m.ApplyingRemote) return true;
+            return m.OnLocalGodPower(pPos, pPower);
         }
 
         private static void SpawnNewUnit_Postfix(Actor __result, string pActorAssetID)
@@ -53,11 +58,16 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingSpawned(__result, pActorAssetID);
         }
 
-        // Suppress local AI + movement on followers (the king is authoritative).
-        private static bool SuppressOnFollower_Prefix()
+        private static void Terraform_Postfix(WorldTile pTile, TileType pNewTypeMain, TopTileType pTopType)
+        {
+            MirrorManager.Instance?.OnKingTerraform(pTile, pNewTypeMain, pTopType);
+        }
+
+        // Suppress autonomous AI decisions on followers (king is authoritative).
+        private static bool SuppressAi_Prefix()
         {
             var m = MirrorManager.Instance;
-            return m == null || !m.IsFollower;           // false on follower → skip simulation
+            return m == null || !m.IsFollower;
         }
     }
 }
