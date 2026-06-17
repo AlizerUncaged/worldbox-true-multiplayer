@@ -151,10 +151,27 @@ namespace WorldboxMP.Client.Mirror
                 // (skip the op for that one building) so the sim loop survives. Building.asset
                 // is internal at runtime -> reflection.
                 _buildingAssetField = AccessTools.Field(typeof(Building), "asset");
+                _buildingComponentsField = AccessTools.Field(typeof(Building), "components_list");
                 var shake = AccessTools.Method(typeof(Building), "updateShake", new[] { typeof(float) });
                 if (shake != null) harmony.Patch(shake, prefix: H(nameof(BuildingUpdateShake_Prefix)));
                 var housing = AccessTools.Method(typeof(Building), "hasHousingLogic");
                 if (housing != null) harmony.Patch(housing, prefix: H(nameof(BuildingHasHousing_Prefix)));
+                var comps = AccessTools.Method(typeof(Building), "updateComponents", new[] { typeof(float) });
+                if (comps != null) harmony.Patch(comps, prefix: H(nameof(BuildingUpdateComponents_Prefix)));
+
+                // ROOT FIX: the king is authoritative for buildings. The follower must NOT
+                // autonomously construct buildings (its sim was producing uninitialized
+                // shells that crash). addBuilding(...) is the construction path; loadObject
+                // (snapshot + king's structural sync) is the valid load path and does NOT
+                // route through addBuilding, so suppressing addBuilding on followers leaves
+                // synced/snapshot buildings intact. Skip only outside world-load.
+                foreach (var mi in typeof(BuildingManager).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    if (mi.Name != "addBuilding") continue;
+                    var ps = mi.GetParameters();
+                    if (ps.Length > 0 && ps[0].ParameterType == typeof(BuildingAsset))
+                    { harmony.Patch(mi, prefix: H(nameof(SuppressFollowerBuild_Prefix))); break; }
+                }
 
                 // Our runtime world reloads (join snapshot / resync) can re-enter the
                 // window preloader and call instantiateWindow twice for the same id,
@@ -367,6 +384,22 @@ namespace WorldboxMP.Client.Mirror
         }
 
         private static FieldInfo _buildingAssetField;
+        private static FieldInfo _buildingComponentsField;
+        private static int _suppressedBuilds;
+
+        // Stop the follower from autonomously constructing buildings (king is authoritative).
+        // Allowed during world load (snapshot) so the load pipeline isn't broken.
+        private static bool SuppressFollowerBuild_Prefix(ref Building __result)
+        {
+            var m = MirrorManager.Instance;
+            if (m != null && m.IsFollower && !SmoothLoader.isLoading())
+            {
+                __result = null;
+                if (_suppressedBuilds < 3) { _suppressedBuilds++; ModLog.Info("[FOLLOWER] suppressed autonomous addBuilding (king-authoritative)."); }
+                return false;
+            }
+            return true;
+        }
 
         // Skip building shake on followers when the building has no batch (uninitialized
         // mirrored building) — the shake code dereferences batch.rnd / batch.c_shake.
@@ -374,6 +407,13 @@ namespace WorldboxMP.Client.Mirror
         {
             var m = MirrorManager.Instance;
             return !(m != null && m.IsFollower && __instance != null && __instance.batch == null);
+        }
+
+        // Skip component updates on followers for uninitialized shells (null components_list).
+        private static bool BuildingUpdateComponents_Prefix(Building __instance)
+        {
+            var m = MirrorManager.Instance;
+            return !(m != null && m.IsFollower && __instance != null && _buildingComponentsField?.GetValue(__instance) == null);
         }
 
         // Treat an asset-less mirrored building as "no housing" on followers instead of
