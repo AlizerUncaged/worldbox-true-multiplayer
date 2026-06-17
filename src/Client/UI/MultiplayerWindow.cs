@@ -15,7 +15,7 @@ namespace WorldboxMP.Client.UI
     /// </summary>
     public class MultiplayerWindow : SingleAutoLayoutWindow<MultiplayerWindow>
     {
-        public const string WindowId = "wbmp_main";
+        public new const string WindowId = "wbmp_main";
         private static bool _created;
 
         private NetClient Net => NetClient.Instance;

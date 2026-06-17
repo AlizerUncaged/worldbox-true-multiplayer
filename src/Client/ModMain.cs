@@ -42,6 +42,10 @@ namespace WorldboxMP.Client
             int port = Net.ServerConfig.Port;
             net.Connect(host, port);
             ModLog.Info($"Connecting to {host}:{port} (F9 toggles the manager).");
+
+#if DEBUG
+            Dev.DevAutoLogin.TryStart();
+#endif
         }
     }
 }
