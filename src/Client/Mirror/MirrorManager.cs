@@ -69,6 +69,7 @@ namespace WorldboxMP.Client.Mirror
         // Movement is event-based: the king's per-tile moveTo commits are collected
         // here and flushed once per frame (no polling/interval).
         private readonly List<MoveMsg> _pendingMoves = new List<MoveMsg>(128);
+        private readonly List<MoveMsg> _pendingGoto = new List<MoveMsg>(64);
         private bool _applyingMove;
         private float _snapshotTimer;
         private float _timeTimer;
@@ -131,6 +132,13 @@ namespace WorldboxMP.Client.Mirror
             if (!Active || !IsKing || _applyingMove || actor == null || target == null) return;
             _pendingMoves.Add(new MoveMsg { KingId = actor.id, X = target.pos.x, Y = target.pos.y });
             DbgMovesSent++;
+        }
+
+        /// <summary>King: an actor got a pathfinding destination → followers pathfind there too.</summary>
+        public void OnKingGoTo(Actor actor, WorldTile dest)
+        {
+            if (!Active || !IsKing || _applyingMove || actor == null || dest == null) return;
+            _pendingGoto.Add(new MoveMsg { KingId = actor.id, X = dest.pos.x, Y = dest.pos.y });
         }
 
         // ── Local action capture (from hooks) ───────────────────────────────
@@ -274,7 +282,7 @@ namespace WorldboxMP.Client.Mirror
                         object data = null;
                         try { data = r.GetData?.Invoke(obj, null); } catch (Exception ge) { ModLog.Warn($"[KING] {r.ObjType.Name}.getData: " + ge.Message); }
                         if (data == null) data = r.DataField?.GetValue(obj);   // fallback to live data field
-                        if (data == null) return;
+                        if (data == null) { ModLog.Warn($"[KING] OnKingObject({r.ObjType.Name}): data null (getData+field both null) — not synced"); return; }
                         Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg
                         { Kind = r.Kind, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
                         DbgObjSent++;
@@ -365,6 +373,9 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.Move:
                     if (IsFollower) ApplyMoveBatch(MirrorCodec.ReadMoveBatch(msg.Payload));
+                    break;
+                case MirrorKind.GoTo:
+                    if (IsFollower) ApplyGoToBatch(MirrorCodec.ReadMoveBatch(msg.Payload));
                     break;
                 case MirrorKind.Death:
                     if (IsFollower) ApplyDeath(MirrorCodec.ReadDeath(msg.Payload));
@@ -488,6 +499,9 @@ namespace WorldboxMP.Client.Mirror
                     var a = Resolve(m.KingId);
                     if (a == null) { DbgMovesNullResolve++; continue; }
                     if (!a.isAlive()) { DbgMovesDead++; continue; }   // don't walk a corpse
+                    // If the actor is already walking a synced goTo path, don't override its
+                    // next step with a stale per-tile move (that's what caused stop-start).
+                    if (a.current_path != null && a.current_path_index < a.current_path.Count) continue;
                     var tile = World.world?.GetTile(m.X, m.Y);
                     if (tile == null) { DbgMovesNoTile++; continue; }
                     // Replay the exact step: the game registers the actor as moving,
@@ -495,6 +509,28 @@ namespace WorldboxMP.Client.Mirror
                     // it there (smooth + animated + keeps current_tile valid for detailed LOD).
                     try { a.moveTo(tile); DbgMovesApplied++; }
                     catch (Exception me) { DbgMovesEx++; DbgLastMoveEx = (me.InnerException ?? me).Message; }
+                }
+            }
+            finally { _applyingMove = false; }
+        }
+
+        // Replay the king's pathfinding destinations: the follower's OWN pathfinding walks
+        // the actor there continuously (smooth) on the identical (snapshot) terrain. This
+        // is the primary movement channel; per-tile Move is only a fallback for actors not
+        // currently following a synced path.
+        private void ApplyGoToBatch(List<MoveMsg> list)
+        {
+            _applyingMove = true;
+            try
+            {
+                foreach (var m in list)
+                {
+                    var a = Resolve(m.KingId);
+                    if (a == null || !a.isAlive()) continue;
+                    var tile = World.world?.GetTile(m.X, m.Y);
+                    if (tile == null) continue;
+                    try { a.goTo(tile); DbgMovesApplied++; }
+                    catch (Exception ge) { DbgMovesEx++; DbgLastMoveEx = (ge.InnerException ?? ge).Message; }
                 }
             }
             finally { _applyingMove = false; }
@@ -742,7 +778,12 @@ namespace WorldboxMP.Client.Mirror
                 Send(MirrorKind.SimControl, MirrorCodec.Write(new SimControlMsg { Paused = paused, SpeedId = speed }));
             }
 
-            // Flush this frame's movement-step events (event-based, not polled).
+            // Flush this frame's movement events (event-based, not polled).
+            if (_pendingGoto.Count > 0)
+            {
+                Send(MirrorKind.GoTo, MirrorCodec.WriteMoveBatch(_pendingGoto));
+                _pendingGoto.Clear();
+            }
             if (_pendingMoves.Count > 0)
             {
                 Send(MirrorKind.Move, MirrorCodec.WriteMoveBatch(_pendingMoves));

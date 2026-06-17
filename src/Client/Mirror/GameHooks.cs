@@ -59,9 +59,15 @@ namespace WorldboxMP.Client.Mirror
                 var removeFire = AccessTools.Method(typeof(WorldBehaviourActionFire), "removeFire");
                 if (removeFire != null) harmony.Patch(removeFire, postfix: H(nameof(RemoveFire_Postfix)));
 
-                // moveTo is the per-tile step commit — THE event for movement mirroring.
+                // moveTo is the per-tile step commit (fallback for non-path moves).
                 var moveTo = AccessTools.Method(typeof(Actor), "moveTo", new[] { typeof(WorldTile) });
                 if (moveTo != null) harmony.Patch(moveTo, postfix: H(nameof(MoveTo_Postfix)));
+
+                // goTo is the pathfinding destination — THE event for smooth movement.
+                // Followers replay goTo so their own pathfinding walks there continuously.
+                var goTo = AccessTools.Method(typeof(Actor), "goTo",
+                    new[] { typeof(WorldTile), typeof(bool), typeof(bool), typeof(bool), typeof(int) });
+                if (goTo != null) harmony.Patch(goTo, postfix: H(nameof(GoTo_Postfix)));
 
                 var setLaw = AccessTools.Method(typeof(WorldLaws), "setAgeEnabled", new[] { typeof(string), typeof(bool) });
                 if (setLaw != null) harmony.Patch(setLaw, postfix: H(nameof(SetWorldLaw_Postfix)));
@@ -292,6 +298,11 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingMove(__instance, pTileTarget);
         }
 
+        private static void GoTo_Postfix(Actor __instance, WorldTile pTile)
+        {
+            MirrorManager.Instance?.OnKingGoTo(__instance, pTile);
+        }
+
         private static void SetWorldLaw_Postfix(string pID, bool pValue)
         {
             MirrorManager.Instance?.OnKingLaw(pID, pValue);
@@ -327,8 +338,10 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingEquip(pActor, pItem);
         }
 
+        private static int _structCreateLogged;
         private static void StructuralCreate_Postfix(object __result)
         {
+            if (_structCreateLogged < 12) { _structCreateLogged++; ModLog.Info($"[KING] structural create hook fired: {(__result == null ? "null" : __result.GetType().Name)}"); }
             MirrorManager.Instance?.OnKingObject(__result);
         }
 
