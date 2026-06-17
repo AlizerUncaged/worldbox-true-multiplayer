@@ -1,3 +1,4 @@
+using System;
 using HarmonyLib;
 using NeoModLoader.api;
 using WorldboxMP.Client.Net;
@@ -29,26 +30,31 @@ namespace WorldboxMP.Client
             try { IconFactory.ModFolder = GetDeclaration()?.FolderPath; }
             catch { IconFactory.ModFolder = null; }
 
-            var harmony = new Harmony("alizer.worldboxmp");
-            harmony.PatchAll(GetType().Assembly);
-
-            // Networking + UI.
+            // Each step is isolated so a failure in one (e.g. a Harmony hook) can't
+            // take down the whole mod — it logs and the rest still loads.
             var net = new NetClient();
-            MultiplayerWindow.Ensure();
-            NetPump.Spawn();
-            UI.PlayerCursors.Spawn();
-
-            // Mirroring (god powers / spawns / world sync / cursors).
-            Mirror.MirrorManager.Init(harmony);
+            Step("UI", () => { MultiplayerWindow.Ensure(); NetPump.Spawn(); UI.PlayerCursors.Spawn(); });
+            Step("mirroring", () =>
+            {
+                var harmony = new Harmony("alizer.worldboxmp");
+                Mirror.MirrorManager.Init(harmony);
+            });
 
             string host = Net.ServerConfig.Host;
             int port = Net.ServerConfig.Port;
-            net.Connect(host, port);
+            Step("connect", () => net.Connect(host, port));
             ModLog.Info($"Connecting to {host}:{port} (F9 toggles the manager).");
 
 #if DEBUG
-            Dev.DevAutoLogin.TryStart();
+            Step("dev-autologin", Dev.DevAutoLogin.TryStart);
 #endif
+        }
+
+        /// <summary>Run an init step in isolation so one failure logs instead of killing the whole mod load.</summary>
+        private static void Step(string name, Action action)
+        {
+            try { action(); }
+            catch (Exception e) { ModLog.Error($"Init step '{name}' failed: " + e); }
         }
     }
 }

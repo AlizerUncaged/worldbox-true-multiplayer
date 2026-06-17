@@ -9,8 +9,8 @@ namespace WorldboxMP.Client.Dev
 {
     /// <summary>
     /// DEBUG-only: allocates a real Windows console for this WorldBox instance and
-    /// pipes ModLog + all Unity logs/exceptions to it, so multiplayer behaviour can
-    /// be debugged live. Compiled out in Release.
+    /// pipes ModLog + all Unity logs/exceptions to it AND to a log file (so a crash
+    /// that closes the console still leaves a readable log). Compiled out in Release.
     /// </summary>
     internal static class DevConsole
     {
@@ -18,11 +18,26 @@ namespace WorldboxMP.Client.Dev
         [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
 
         private static bool _started;
+        private static StreamWriter _file;
+        public static string LogPath { get; private set; }
 
         public static void Start()
         {
             if (_started) return;
             _started = true;
+
+            // 1) Log file FIRST — this survives a crash even if the console window closes.
+            try
+            {
+                LogPath = Path.Combine(Application.persistentDataPath, "wbmp-client.log");
+                _file = new StreamWriter(LogPath, append: false, new UTF8Encoding(false)) { AutoFlush = true };
+                _file.WriteLine($"==== WorldBox Multiplayer client log — {DateTime.Now} ====");
+                // Capture EVERYTHING (incl. uncaught exceptions) to the file.
+                Application.logMessageReceivedThreaded += OnUnityLog;
+            }
+            catch (Exception e) { Debug.LogWarning("[WBMP] log file init failed: " + e); }
+
+            // 2) Console window (best-effort; if it fails we still have the file).
             try
             {
                 if (GetConsoleWindow() == IntPtr.Zero) AllocConsole();
@@ -30,12 +45,11 @@ namespace WorldboxMP.Client.Dev
                 Console.SetOut(stdout);
                 try { Console.Title = "WorldBox Multiplayer — debug"; } catch { }
                 Console.WriteLine("================ WorldBox Multiplayer debug console ================");
-                Application.logMessageReceivedThreaded += OnUnityLog;
+                Console.WriteLine("Log file: " + LogPath);
             }
-            catch (Exception e) { Debug.LogWarning("[WBMP] DevConsole init failed: " + e); }
+            catch (Exception e) { Debug.LogWarning("[WBMP] DevConsole window init failed: " + e); }
         }
 
-        /// <summary>Update the console title (e.g. with the logged-in account).</summary>
         public static void SetTitle(string title)
         {
             try { Console.Title = "WorldBox Multiplayer — " + title; } catch { }
@@ -43,15 +57,11 @@ namespace WorldboxMP.Client.Dev
 
         private static void OnUnityLog(string condition, string stackTrace, LogType type)
         {
-            try
-            {
-                string ts = DateTime.Now.ToString("HH:mm:ss");
-                if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
-                    Console.WriteLine($"[{ts}] [{type}] {condition}\n{stackTrace}");
-                else
-                    Console.WriteLine($"[{ts}] {condition}");
-            }
-            catch { }
+            string ts = DateTime.Now.ToString("HH:mm:ss");
+            bool err = type == LogType.Error || type == LogType.Exception || type == LogType.Assert;
+            string line = err ? $"[{ts}] [{type}] {condition}\n{stackTrace}" : $"[{ts}] {condition}";
+            try { Console.WriteLine(line); } catch { }
+            try { _file?.WriteLine(line); } catch { }
         }
     }
 }
