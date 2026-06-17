@@ -20,13 +20,26 @@ namespace WorldboxMP.Server
             ConsoleExtensions.Enable();   // enable ANSI colour on Windows consoles
             Console.Title = "WorldBox Multiplayer Server";
 
-            // Make any crash visible instead of the window vanishing.
+            // Any background-thread crash → show it and wait, never vanish.
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             {
                 Console.WriteLine("\nUNHANDLED EXCEPTION:\n" + e.ExceptionObject);
-                Console.WriteLine("Press Enter to exit."); try { Console.ReadLine(); } catch { }
+                Pause();
             };
 
+            try
+            {
+                Run();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("\nFATAL ERROR:\n" + ex);
+                Pause();
+            }
+        }
+
+        private static void Run()
+        {
             string mongo = Environment.GetEnvironmentVariable("WBMP_MONGO") ?? DefaultMongo;
             int port = int.TryParse(Environment.GetEnvironmentVariable("WBMP_PORT"), out var p) ? p : NetProtocol.DefaultPort;
 
@@ -43,11 +56,10 @@ namespace WorldboxMP.Server
             }
             catch (Exception ex)
             {
-                Console.WriteLine("\nFATAL: could not connect to MongoDB.\n" + ex);
+                Console.WriteLine("\nERROR: could not connect to MongoDB.\n" + ex);
                 Console.WriteLine("\nLikely the Atlas cluster is paused/unreachable, or the connection string/credentials are wrong.");
-                Console.WriteLine("Override with env WBMP_MONGO=<connection string> and retry.");
-                Console.WriteLine("\nPress Enter to exit.");
-                try { Console.ReadLine(); } catch { }
+                Console.WriteLine("Override with env WBMP_MONGO=<connection string> and restart.");
+                Pause();   // do not exit silently — wait so the error is readable
                 return;
             }
 
@@ -66,6 +78,14 @@ namespace WorldboxMP.Server
 
             Console.WriteLine("Shutting down...");
             server.Stop();
+        }
+
+        /// <summary>Keep the console open until a key is pressed (so errors are readable).</summary>
+        private static void Pause()
+        {
+            Console.WriteLine("\nPress any key to continue...");
+            try { Console.ReadKey(true); }
+            catch { try { Console.ReadLine(); } catch { } }
         }
     }
 }
