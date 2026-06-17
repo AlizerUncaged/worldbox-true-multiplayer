@@ -90,6 +90,11 @@ namespace WorldboxMP.Client.Dev
                 MirrorManager.DbgObjSent = MirrorManager.DbgObjRecv = 0; MirrorManager.DbgLastMoveEx = "";
 
                 int simCalls = GameHooks.SimCallsThisInterval; GameHooks.SimCallsThisInterval = 0;
+                bool paused = false, cfgPaused = false, winActive = false;
+                try { paused = World.world.isPaused(); } catch { }
+                try { cfgPaused = Config.paused; } catch { }
+                try { winActive = ScrollWindow.isWindowActive(); } catch { }
+                flow = $"paused={paused} cfgPaused={cfgPaused} winActive={winActive} | " + flow;
                 ModLog.Info($"[MOVEDIAG] role={role} speed={speed} ticks={ticks} unitMult={mult:F2} simElapsed={GameHooks.LastSimElapsed:F4} simCalls/2s={simCalls} fixedDt={Time.fixedDeltaTime:F4} {actorInfo} | {flow}");
             }
             catch (Exception e) { ModLog.Warn("[MOVEDIAG] " + e.Message); }
