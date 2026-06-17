@@ -54,7 +54,9 @@ namespace WorldboxMP.Client.Dev
                 {
                     var list = w.units.getSimpleList();
                     Actor a = null;
-                    for (int i = 0; i < list.Count; i++) if (list[i] != null && list[i].isAlive()) { a = list[i]; break; }
+                    // Prefer a MOVING actor (so we measure a real walker, not an idle unit).
+                    for (int i = 0; i < list.Count; i++) if (list[i] != null && list[i].isAlive() && list[i].is_moving) { a = list[i]; break; }
+                    if (a == null) for (int i = 0; i < list.Count; i++) if (list[i] != null && list[i].isAlive()) { a = list[i]; break; }
                     if (a != null)
                     {
                         float cms = -1f;
