@@ -503,10 +503,23 @@ namespace WorldboxMP.Client.Mirror
                     if (!a.isAlive()) { DbgMovesDead++; continue; }   // don't walk a corpse
                     var tile = World.world?.GetTile(m.X, m.Y);
                     if (tile == null) { DbgMovesNoTile++; continue; }
-                    // Replay the exact step: the game registers the actor as moving,
-                    // sets next_step_position, and its own u10_checkSmoothMovement walks
-                    // it there (smooth + animated + keeps current_tile valid for detailed LOD).
-                    try { a.moveTo(tile); DbgMovesApplied++; }
+                    // Feed the king's step into the actor's OWN path queue so the game's
+                    // updatePathMovement walks node-to-node CONTINUOUSLY. Replaying moveTo
+                    // per tile made the actor dart to each tile then stopMovement() (which
+                    // clears next_step_position + deregisters it) and wait for the next
+                    // packet -> idle most of the time -> looked extremely slow. With a path,
+                    // isUsingPath() stays true so updateMovement chains to the next node.
+                    try
+                    {
+                        var path = a.current_path;
+                        if (a.current_path_index > 0 && a.current_path_index >= path.Count)
+                        { path.Clear(); a.current_path_index = 0; }              // fully consumed → reset
+                        else if (a.current_path_index > 128)
+                        { path.RemoveRange(0, a.current_path_index); a.current_path_index = 0; }  // trim consumed
+                        path.Add(tile);
+                        if (!a.is_moving) a.updatePathMovement();                // kick off continuous walking
+                        DbgMovesApplied++;
+                    }
                     catch (Exception me) { DbgMovesEx++; DbgLastMoveEx = (me.InnerException ?? me).Message; }
                 }
             }
