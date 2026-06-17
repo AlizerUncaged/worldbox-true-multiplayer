@@ -150,6 +150,19 @@ namespace WorldboxMP.Client.Mirror
                 // then NREs on them in several places. Guard each crash site on followers
                 // (skip the op for that one building) so the sim loop survives. Building.asset
                 // is internal at runtime -> reflection.
+                // PASSIVE FOLLOWER: replace the follower's autonomous world simulation with
+                // a minimal subset (movement + animation + rendering). The king is the only
+                // authority; followers must not run cleanup/cities/kingdoms/wars/etc. (which
+                // crash on the partially-mirrored state and diverge). Keeps updateActors
+                // (movement interp) + updateBuildings (render, guarded) + updateMapLayers.
+                _mbUpdateActors    = AccessTools.Method(typeof(MapBox), "updateActors", new[] { typeof(float) });
+                _mbUpdateBuildings = AccessTools.Method(typeof(MapBox), "updateBuildings", new[] { typeof(float) });
+                _mbUpdateMapLayers = AccessTools.Method(typeof(MapBox), "updateMapLayers", new[] { typeof(float) });
+                _animUpdateTime    = AccessTools.Method(typeof(AnimationHelper), "updateTime", new[] { typeof(float), typeof(float) });
+                _enemiesClear      = AccessTools.Method(typeof(EnemiesFinder), "clear");
+                var sim = AccessTools.Method(typeof(MapBox), "updateSimulation", new[] { typeof(float) });
+                if (sim != null && _mbUpdateActors != null) harmony.Patch(sim, prefix: H(nameof(PassiveSim_Prefix)));
+
                 _buildingAssetField = AccessTools.Field(typeof(Building), "asset");
                 _buildingComponentsField = AccessTools.Field(typeof(Building), "components_list");
                 var shake = AccessTools.Method(typeof(Building), "updateShake", new[] { typeof(float) });
@@ -388,6 +401,31 @@ namespace WorldboxMP.Client.Mirror
         private static FieldInfo _buildingAssetField;
         private static FieldInfo _buildingComponentsField;
         private static int _suppressedBuilds;
+
+        private static MethodInfo _mbUpdateActors, _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear;
+        private static bool _passiveLogged;
+
+        // Follower runs ONLY the visual subset of the simulation; the king drives all
+        // autonomous world changes. This skips updateDirtyMetaContainersAndCleanup,
+        // cities/kingdoms/wars/cultures/drops/etc. — the systems that NRE on partially
+        // mirrored state and would diverge from the king.
+        private static bool PassiveSim_Prefix(MapBox __instance, float pElapsed)
+        {
+            var m = MirrorManager.Instance;
+            if (m == null || !m.IsFollower) return true; // king/idle: full simulation
+            try
+            {
+                float dt = Time.fixedDeltaTime;
+                _enemiesClear?.Invoke(null, null);
+                _animUpdateTime?.Invoke(null, new object[] { pElapsed, dt });
+                _mbUpdateMapLayers?.Invoke(__instance, new object[] { pElapsed }); // water/lava/anim layers
+                _mbUpdateActors?.Invoke(__instance, new object[] { pElapsed });     // movement interp + actor render
+                _mbUpdateBuildings?.Invoke(__instance, new object[] { pElapsed });  // building render (guarded)
+                if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (movement+render only; king is authoritative)."); }
+            }
+            catch (Exception e) { if (!_passiveLogged) { _passiveLogged = true; ModLog.Warn("[FOLLOWER] passive sim subcall failed: " + e.Message); } }
+            return false; // skip the full autonomous simulation
+        }
 
         // Stop the follower from autonomously constructing buildings (king is authoritative).
         // Allowed during world load (snapshot) so the load pipeline isn't broken.
