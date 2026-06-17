@@ -145,6 +145,17 @@ namespace WorldboxMP.Client.Mirror
                 var bbVis = AccessTools.Method(typeof(BatchBuildings), "updateVisibility");
                 if (bbVis != null) harmony.Patch(bbVis, finalizer: H(nameof(BatchBuildingsVisibility_Finalizer)));
 
+                // The mirrored world can contain buildings that aren't fully initialized
+                // on a follower (null asset/batch/current_tile). The follower's own sim
+                // then NREs on them in several places. Guard each crash site on followers
+                // (skip the op for that one building) so the sim loop survives. Building.asset
+                // is internal at runtime -> reflection.
+                _buildingAssetField = AccessTools.Field(typeof(Building), "asset");
+                var shake = AccessTools.Method(typeof(Building), "updateShake", new[] { typeof(float) });
+                if (shake != null) harmony.Patch(shake, prefix: H(nameof(BuildingUpdateShake_Prefix)));
+                var housing = AccessTools.Method(typeof(Building), "hasHousingLogic");
+                if (housing != null) harmony.Patch(housing, prefix: H(nameof(BuildingHasHousing_Prefix)));
+
                 // Our runtime world reloads (join snapshot / resync) can re-enter the
                 // window preloader and call instantiateWindow twice for the same id,
                 // which throws a duplicate-key ArgumentException and aborts the load.
@@ -353,6 +364,29 @@ namespace WorldboxMP.Client.Mirror
         {
             var m = MirrorManager.Instance;
             return m == null || !m.IsFollower;
+        }
+
+        private static FieldInfo _buildingAssetField;
+
+        // Skip building shake on followers when the building has no batch (uninitialized
+        // mirrored building) — the shake code dereferences batch.rnd / batch.c_shake.
+        private static bool BuildingUpdateShake_Prefix(Building __instance)
+        {
+            var m = MirrorManager.Instance;
+            return !(m != null && m.IsFollower && __instance != null && __instance.batch == null);
+        }
+
+        // Treat an asset-less mirrored building as "no housing" on followers instead of
+        // NREing in asset.canBeOccupied() (hit from BuildingManager.destroyObject).
+        private static bool BuildingHasHousing_Prefix(Building __instance, ref bool __result)
+        {
+            var m = MirrorManager.Instance;
+            if (m != null && m.IsFollower && __instance != null && _buildingAssetField?.GetValue(__instance) == null)
+            {
+                __result = false;
+                return false;
+            }
+            return true;
         }
 
         private static int _bbErrLogged;
