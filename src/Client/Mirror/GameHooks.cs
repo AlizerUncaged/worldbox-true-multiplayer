@@ -56,6 +56,9 @@ namespace WorldboxMP.Client.Mirror
                 var moveTo = AccessTools.Method(typeof(Actor), "moveTo", new[] { typeof(WorldTile) });
                 if (moveTo != null) harmony.Patch(moveTo, postfix: H(nameof(MoveTo_Postfix)));
 
+                var setLaw = AccessTools.Method(typeof(WorldLaws), "setAgeEnabled", new[] { typeof(string), typeof(bool) });
+                if (setLaw != null) harmony.Patch(setLaw, postfix: H(nameof(SetWorldLaw_Postfix)));
+
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
@@ -106,6 +109,11 @@ namespace WorldboxMP.Client.Mirror
         private static void MoveTo_Postfix(Actor __instance, WorldTile pTileTarget)
         {
             MirrorManager.Instance?.OnKingMove(__instance, pTileTarget);
+        }
+
+        private static void SetWorldLaw_Postfix(string pID, bool pValue)
+        {
+            MirrorManager.Instance?.OnKingLaw(pID, pValue);
         }
 
         private static void AddTrait_Postfix(Actor __instance, string pTraitID)

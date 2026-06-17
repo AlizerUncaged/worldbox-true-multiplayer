@@ -37,6 +37,10 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _clickedFinal;
         private static MethodInfo _die;
         private static MethodInfo _checkSprite;
+        // Actor.data / Subspecies.data are internal at runtime (the publicized DLL
+        // lies), so read them via reflection.
+        private static FieldInfo _actorDataField;
+        private static FieldInfo _subDataField;
 
         // Movement is event-based: the king's per-tile moveTo commits are collected
         // here and flushed once per frame (no polling/interval).
@@ -58,6 +62,8 @@ namespace WorldboxMP.Client.Mirror
                 new[] { typeof(Vector2Int), typeof(GodPower), typeof(bool) });
             _die = AccessTools.Method(typeof(Actor), "die");
             _checkSprite = AccessTools.Method(typeof(Actor), "checkSpriteToRender");
+            _actorDataField = AccessTools.Field(typeof(Actor), "data");
+            _subDataField = AccessTools.Field(typeof(Subspecies), "data");
             GameHooks.Apply(harmony);
 
             var net = NetClient.Instance;
@@ -102,18 +108,28 @@ namespace WorldboxMP.Client.Mirror
             if (!Active || !IsKing || ApplyingSpawn || actor == null) return;
             try
             {
-                long subId = actor.data.subspecies;
+                var data = _actorDataField?.GetValue(actor) as ActorData;
+                if (data == null) { ModLog.Warn("[KING] spawn: actor.data null/inaccessible"); return; }
+
+                long subId = 0;
                 string subJson = "";
-                if (subId != 0)
+                try
                 {
-                    var sub = World.world.subspecies.get(subId);
-                    if (sub != null) subJson = JsonConvert.SerializeObject(sub.data, JsonHelper.read_settings);
+                    subId = data.subspecies;
+                    if (subId != 0)
+                    {
+                        var sub = World.world.subspecies.get(subId);
+                        var subData = sub != null ? _subDataField?.GetValue(sub) as SubspeciesData : null;
+                        if (subData != null) subJson = JsonConvert.SerializeObject(subData, JsonHelper.read_settings);
+                    }
                 }
-                string actorJson = JsonConvert.SerializeObject(actor.data, JsonHelper.read_settings);
+                catch (Exception se) { ModLog.Warn("[KING] subspecies serialize skipped: " + se.Message); }
+
+                string actorJson = JsonConvert.SerializeObject(data, JsonHelper.read_settings);
                 Send(MirrorKind.SpawnUnit, MirrorCodec.Write(new SpawnMsg { SubId = subId, SubspeciesJson = subJson, ActorJson = actorJson }));
-                ModLog.Info($"[KING] broadcast spawn id={actor.id} asset={actor.data.asset_id} sub={subId} actor={actorJson.Length}B sub={subJson.Length}B");
+                ModLog.Info($"[KING] broadcast spawn id={actor.id} sub={subId} actor={actorJson.Length}B sub={subJson.Length}B");
             }
-            catch (Exception e) { ModLog.Error("OnKingSpawned serialize failed: " + e); }
+            catch (Exception e) { ModLog.Error("OnKingSpawned failed: " + e); }
         }
 
         public void OnKingTerraform(WorldTile tile, TileType main, TopTileType top)
@@ -139,6 +155,13 @@ namespace WorldboxMP.Client.Mirror
         {
             if (!Active || !IsKing || actor == null || string.IsNullOrEmpty(traitId)) return;
             Send(MirrorKind.Trait, MirrorCodec.Write(new TraitMsg { KingId = actor.id, TraitId = traitId, Add = add }));
+        }
+
+        private bool _applyingLaw;
+        public void OnKingLaw(string id, bool value)
+        {
+            if (!Active || !IsKing || _applyingLaw || string.IsNullOrEmpty(id)) return;
+            Send(MirrorKind.WorldLaw, MirrorCodec.Write(new WorldLawMsg { Id = id, Value = value }));
         }
 
         // ── Incoming ────────────────────────────────────────────────────────
@@ -168,6 +191,9 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.Trait:
                     if (IsFollower) ApplyTrait(MirrorCodec.ReadTrait(msg.Payload));
+                    break;
+                case MirrorKind.WorldLaw:
+                    if (IsFollower) ApplyLaw(MirrorCodec.ReadWorldLaw(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -215,17 +241,18 @@ namespace WorldboxMP.Client.Mirror
                     if (subData != null) World.world.subspecies.loadObject(subData);
                 }
                 // 2) Rebuild the exact actor from its data (same id, stats, traits, equipment…).
+                //    Pass the data straight to the game's own loader (it reads the data
+                //    fields internally, so we never touch ActorData fields ourselves).
                 var actorData = JsonConvert.DeserializeObject<ActorData>(m.ActorJson, JsonHelper.read_settings);
                 if (actorData == null) { ModLog.Warn("[FOLLOWER] spawn: actorData deserialized null"); return; }
-                var tile = World.world?.GetTile(actorData.x, actorData.y);
                 var a = World.world.units.loadObject(actorData);
                 if (a != null)
                 {
-                    _kingToLocal[actorData.id] = a;
+                    _kingToLocal[a.id] = a;   // a.id == king's id (loadObject preserves it)
                     try { _checkSprite?.Invoke(a, null); } catch { }
-                    ModLog.Info($"[FOLLOWER] spawned id={actorData.id} asset={actorData.asset_id} at ({actorData.x},{actorData.y}) tileOk={tile != null}");
+                    ModLog.Info($"[FOLLOWER] spawned id={a.id}");
                 }
-                else ModLog.Warn($"[FOLLOWER] loadObject returned null id={actorData.id} asset={actorData.asset_id} at ({actorData.x},{actorData.y}) tileOk={tile != null}");
+                else ModLog.Warn("[FOLLOWER] loadObject returned null (tile/asset missing on this client?)");
             }
             catch (Exception e) { ModLog.Error("ApplySpawn failed: " + e); }
             finally { ApplyingSpawn = false; }
@@ -270,6 +297,14 @@ namespace WorldboxMP.Client.Mirror
                 else WorldBehaviourActionFire.removeFire(tile);
             }
             catch (Exception e) { ModLog.Warn("ApplyFire failed: " + e.Message); }
+        }
+
+        private void ApplyLaw(WorldLawMsg m)
+        {
+            _applyingLaw = true;
+            try { World.world.world_laws.setAgeEnabled(m.Id, m.Value); }
+            catch (Exception e) { ModLog.Warn("ApplyLaw failed: " + e.Message); }
+            finally { _applyingLaw = false; }
         }
 
         private void ApplyTrait(TraitMsg m)

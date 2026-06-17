@@ -60,5 +60,8 @@ namespace WorldboxMP.Shared.Protocol
         /// animates the walk (no polling, no snapping). Replaces the old EntityState.
         /// </summary>
         Move = 8,
+
+        /// <summary>A world law was toggled (WorldLaws.setAgeEnabled).</summary>
+        WorldLaw = 9,
     }
 }
