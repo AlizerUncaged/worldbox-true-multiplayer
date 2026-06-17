@@ -79,6 +79,12 @@
     <EmbeddedResource Include="Resources\multiplayer-header-icon.png">
       <LogicalName>multiplayer-header-icon.png</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Resources\player-list-icon.png">
+      <LogicalName>player-list-icon.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\login-icon.png">
+      <LogicalName>login-icon.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

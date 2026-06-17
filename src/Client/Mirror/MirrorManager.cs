@@ -41,6 +41,7 @@ namespace WorldboxMP.Client.Mirror
         // lies), so read them via reflection.
         private static FieldInfo _actorDataField;
         private static FieldInfo _subDataField;
+        private static FieldInfo _worldLawsField;   // MapBox.world_laws is internal
 
         // Movement is event-based: the king's per-tile moveTo commits are collected
         // here and flushed once per frame (no polling/interval).
@@ -64,6 +65,7 @@ namespace WorldboxMP.Client.Mirror
             _checkSprite = AccessTools.Method(typeof(Actor), "checkSpriteToRender");
             _actorDataField = AccessTools.Field(typeof(Actor), "data");
             _subDataField = AccessTools.Field(typeof(Subspecies), "data");
+            _worldLawsField = AccessTools.Field(typeof(MapBox), "world_laws");
             GameHooks.Apply(harmony);
 
             var net = NetClient.Instance;
@@ -302,7 +304,11 @@ namespace WorldboxMP.Client.Mirror
         private void ApplyLaw(WorldLawMsg m)
         {
             _applyingLaw = true;
-            try { World.world.world_laws.setAgeEnabled(m.Id, m.Value); }
+            try
+            {
+                var laws = _worldLawsField?.GetValue(World.world) as WorldLaws;
+                laws?.setAgeEnabled(m.Id, m.Value);
+            }
             catch (Exception e) { ModLog.Warn("ApplyLaw failed: " + e.Message); }
             finally { _applyingLaw = false; }
         }
