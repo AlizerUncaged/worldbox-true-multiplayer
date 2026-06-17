@@ -61,6 +61,7 @@ namespace WorldboxMP.Client
                 Dev.CameraDiag.Dump($"scroll dy={Input.mouseScrollDelta.y:F2}");
             if (Input.GetKeyDown(KeyCode.F10))
                 Dev.CameraDiag.Dump("F10");
+            Dev.MoveDiag.Tick(Time.unscaledDeltaTime);
 #endif
         }
 
