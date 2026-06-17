@@ -158,6 +158,8 @@ namespace WorldboxMP.Client.Mirror
                 if (housing != null) harmony.Patch(housing, prefix: H(nameof(BuildingHasHousing_Prefix)));
                 var comps = AccessTools.Method(typeof(Building), "updateComponents", new[] { typeof(float) });
                 if (comps != null) harmony.Patch(comps, prefix: H(nameof(BuildingUpdateComponents_Prefix)));
+                var ustats = AccessTools.Method(typeof(Building), "updateStats");
+                if (ustats != null) harmony.Patch(ustats, prefix: H(nameof(BuildingUpdateStats_Prefix)));
 
                 // ROOT FIX: the king is authoritative for buildings. The follower must NOT
                 // autonomously construct buildings (its sim was producing uninitialized
@@ -414,6 +416,13 @@ namespace WorldboxMP.Client.Mirror
         {
             var m = MirrorManager.Instance;
             return !(m != null && m.IsFollower && __instance != null && _buildingComponentsField?.GetValue(__instance) == null);
+        }
+
+        // Skip stats update on followers when asset is null (shell / mid-destruction building).
+        private static bool BuildingUpdateStats_Prefix(Building __instance)
+        {
+            var m = MirrorManager.Instance;
+            return !(m != null && m.IsFollower && __instance != null && _buildingAssetField?.GetValue(__instance) == null);
         }
 
         // Treat an asset-less mirrored building as "no housing" on followers instead of
