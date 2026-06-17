@@ -36,6 +36,9 @@ namespace WorldboxMP.Client.Mirror
         private bool _applyingDisaster;
 
         private readonly Dictionary<long, Actor> _kingToLocal = new Dictionary<long, Actor>();
+        // DEBUG move/object flow counters (read+reset by MoveDiag).
+        internal static int DbgMovesSent, DbgMovesRecv, DbgMovesApplied, DbgMovesNullResolve, DbgMovesNoTile, DbgMovesDead, DbgMovesEx, DbgObjSent, DbgObjRecv;
+        internal static string DbgLastMoveEx = "";
         private static MethodInfo _clickedFinal;
         private static MethodInfo _die;
         private static MethodInfo _checkSprite;
@@ -127,6 +130,7 @@ namespace WorldboxMP.Client.Mirror
         {
             if (!Active || !IsKing || _applyingMove || actor == null || target == null) return;
             _pendingMoves.Add(new MoveMsg { KingId = actor.id, X = target.pos.x, Y = target.pos.y });
+            DbgMovesSent++;
         }
 
         // ── Local action capture (from hooks) ───────────────────────────────
@@ -273,6 +277,7 @@ namespace WorldboxMP.Client.Mirror
                         if (data == null) return;
                         Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg
                         { Kind = r.Kind, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
+                        DbgObjSent++;
                         return;
                     }
             }
@@ -479,15 +484,17 @@ namespace WorldboxMP.Client.Mirror
             {
                 foreach (var m in list)
                 {
+                    DbgMovesRecv++;
                     var a = Resolve(m.KingId);
-                    if (a == null) continue;
-                    if (!a.isAlive()) continue;   // don't walk a corpse (death + a stale move in the same batch)
+                    if (a == null) { DbgMovesNullResolve++; continue; }
+                    if (!a.isAlive()) { DbgMovesDead++; continue; }   // don't walk a corpse
                     var tile = World.world?.GetTile(m.X, m.Y);
-                    if (tile == null) continue;
+                    if (tile == null) { DbgMovesNoTile++; continue; }
                     // Replay the exact step: the game registers the actor as moving,
                     // sets next_step_position, and its own u10_checkSmoothMovement walks
                     // it there (smooth + animated + keeps current_tile valid for detailed LOD).
-                    try { a.moveTo(tile); } catch { }
+                    try { a.moveTo(tile); DbgMovesApplied++; }
+                    catch (Exception me) { DbgMovesEx++; DbgLastMoveEx = (me.InnerException ?? me).Message; }
                 }
             }
             finally { _applyingMove = false; }
@@ -564,6 +571,7 @@ namespace WorldboxMP.Client.Mirror
                         if (mgr == null) return;
                         var load = AccessTools.Method(mgr.GetType(), "loadObject", new[] { r.DataType });
                         load?.Invoke(mgr, new[] { data });
+                        DbgObjRecv++;
                         return;
                     }
             }

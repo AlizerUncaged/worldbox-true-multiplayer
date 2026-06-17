@@ -66,7 +66,16 @@ namespace WorldboxMP.Client.Dev
                     }
                 }
 
-                ModLog.Info($"[MOVEDIAG] role={role} speed={speed} ticks={ticks} unitMult={mult:F2} fixedDt={Time.fixedDeltaTime:F4} {actorInfo}");
+                // Move/object flow over this interval (then reset).
+                string flow = $"movesSent={MirrorManager.DbgMovesSent} recv={MirrorManager.DbgMovesRecv} applied={MirrorManager.DbgMovesApplied} " +
+                              $"nullResolve={MirrorManager.DbgMovesNullResolve} noTile={MirrorManager.DbgMovesNoTile} dead={MirrorManager.DbgMovesDead} ex={MirrorManager.DbgMovesEx} " +
+                              $"objSent={MirrorManager.DbgObjSent} objRecv={MirrorManager.DbgObjRecv}" +
+                              (string.IsNullOrEmpty(MirrorManager.DbgLastMoveEx) ? "" : $" lastMoveEx={MirrorManager.DbgLastMoveEx}");
+                MirrorManager.DbgMovesSent = MirrorManager.DbgMovesRecv = MirrorManager.DbgMovesApplied = 0;
+                MirrorManager.DbgMovesNullResolve = MirrorManager.DbgMovesNoTile = MirrorManager.DbgMovesDead = MirrorManager.DbgMovesEx = 0;
+                MirrorManager.DbgObjSent = MirrorManager.DbgObjRecv = 0; MirrorManager.DbgLastMoveEx = "";
+
+                ModLog.Info($"[MOVEDIAG] role={role} speed={speed} ticks={ticks} unitMult={mult:F2} fixedDt={Time.fixedDeltaTime:F4} {actorInfo} | {flow}");
             }
             catch (Exception e) { ModLog.Warn("[MOVEDIAG] " + e.Message); }
         }
