@@ -240,6 +240,16 @@ namespace WorldboxMP.Server.Net
                     LogC($"[{room}] {s.Username} terrain '{tr.TileId}' at ({tr.X},{tr.Y})",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("terrain")} {Val(tr.TileId)} {Dim($"at ({tr.X},{tr.Y})")}");
                     break;
+                case MirrorKind.Death:
+                    var dm = MirrorCodec.ReadDeath(msg.Payload);
+                    LogC($"[{room}] {s.Username} unit #{dm.KingId} died",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("death")} {Dim("#" + dm.KingId)}");
+                    break;
+                case MirrorKind.Fire:
+                    var fm = MirrorCodec.ReadFire(msg.Payload);
+                    LogC($"[{room}] {s.Username} fire {(fm.On ? "+" : "-")} ({fm.X},{fm.Y})",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("fire")} {Val(fm.On ? "+" : "-")} {Dim($"({fm.X},{fm.Y})")}");
+                    break;
                 case MirrorKind.SimControl:
                     var sc = MirrorCodec.ReadSimControl(msg.Payload);
                     LogC($"[{room}] {s.Username} sim paused={sc.Paused} speed={sc.SpeedId}",

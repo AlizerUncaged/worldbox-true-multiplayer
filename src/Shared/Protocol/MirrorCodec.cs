@@ -11,6 +11,8 @@ namespace WorldboxMP.Shared.Protocol
     public struct SpawnMsg { public long KingId; public string AssetId; public int X; public int Y; public float Height; }
     public struct EntityPos { public long KingId; public float X; public float Y; public float H; }
     public struct SimControlMsg { public bool Paused; public string SpeedId; }
+    public struct DeathMsg { public long KingId; }
+    public struct FireMsg { public int X; public int Y; public bool On; }
 
     /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
@@ -66,6 +68,24 @@ namespace WorldboxMP.Shared.Protocol
             for (int i = 0; i < n; i++)
                 list.Add(new EntityPos { KingId = r.GetLong(), X = r.GetFloat(), Y = r.GetFloat(), H = r.GetFloat() });
             return list;
+        }
+
+        public static byte[] Write(DeathMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.KingId); return w.CopyData();
+        }
+        public static DeathMsg ReadDeath(byte[] data)
+        {
+            var r = new NetDataReader(data); return new DeathMsg { KingId = r.GetLong() };
+        }
+
+        public static byte[] Write(FireMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.X); w.Put(m.Y); w.Put(m.On); return w.CopyData();
+        }
+        public static FireMsg ReadFire(byte[] data)
+        {
+            var r = new NetDataReader(data); return new FireMsg { X = r.GetInt(), Y = r.GetInt(), On = r.GetBool() };
         }
 
         public static byte[] Write(SimControlMsg m)

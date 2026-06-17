@@ -8,16 +8,16 @@ using WorldboxMP.Shared.Protocol;
 namespace WorldboxMP.Client.UI
 {
     /// <summary>
-    /// Renders each remote player's floating cursor (a colored pointer + their name)
-    /// in world space, and streams the local player's cursor to the room. Updates in
-    /// real time via the server's sequenced cursor channel.
+    /// Renders each remote player's cursor as WorldBox's God Finger sprite with the
+    /// owning player's name centered horizontally underneath, and streams the local
+    /// player's cursor to the room in real time.
     /// </summary>
     public class PlayerCursors : MonoBehaviour
     {
-        private class Visual { public GameObject Root; public SpriteRenderer Dot; public Text Label; }
+        private class Visual { public GameObject Root; public SpriteRenderer Finger; public Text Label; }
 
         private readonly Dictionary<string, Visual> _cursors = new Dictionary<string, Visual>();
-        private static Sprite _dotSprite;
+        private static Sprite _fingerSprite;
         private float _sendTimer;
         private const float SendInterval = 0.05f;   // 20 Hz
 
@@ -60,8 +60,9 @@ namespace WorldboxMP.Client.UI
                 v = CreateVisual(c.Id4);
                 _cursors[c.Id4] = v;
             }
+            // Place the finger so its tip sits roughly at the cursor point.
             v.Root.transform.position = new Vector3(c.X, c.Y, -10f);
-            if (v.Dot != null) v.Dot.color = c.Pressed ? Color.white : ColorFor(c.Id4);
+            if (v.Finger != null) v.Finger.transform.localScale = Vector3.one * (c.Pressed ? 0.42f : 0.5f);
         }
 
         private Visual CreateVisual(string id4)
@@ -69,23 +70,26 @@ namespace WorldboxMP.Client.UI
             var root = new GameObject("cursor_" + id4);
             root.transform.SetParent(transform, false);
 
-            var dotGo = new GameObject("dot");
-            dotGo.transform.SetParent(root.transform, false);
-            var sr = dotGo.AddComponent<SpriteRenderer>();
-            sr.sprite = DotSprite();
-            sr.color = ColorFor(id4);
+            // God Finger sprite (pivot offset so the fingertip is near the cursor point).
+            var fingerGo = new GameObject("finger");
+            fingerGo.transform.SetParent(root.transform, false);
+            fingerGo.transform.localPosition = new Vector3(0f, 0.55f, 0f);
+            var sr = fingerGo.AddComponent<SpriteRenderer>();
+            sr.sprite = FingerSprite();
+            sr.color = Color.white;
             sr.sortingOrder = 32000;
-            dotGo.transform.localScale = Vector3.one * 0.4f;
+            fingerGo.transform.localScale = Vector3.one * 0.5f;
 
-            // Name label on a tiny world-space canvas.
+            // Name centered horizontally directly under the finger.
             var canvasGo = new GameObject("label");
             canvasGo.transform.SetParent(root.transform, false);
-            canvasGo.transform.localPosition = new Vector3(0.6f, 0.6f, 0f);
+            canvasGo.transform.localPosition = new Vector3(0f, -0.35f, 0f);
             var canvas = canvasGo.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.WorldSpace;
             canvas.sortingOrder = 32001;
             var crt = (RectTransform)canvasGo.transform;
-            crt.sizeDelta = new Vector2(120, 24);
+            crt.sizeDelta = new Vector2(160, 26);
+            crt.pivot = new Vector2(0.5f, 0.5f);
             canvasGo.transform.localScale = Vector3.one * 0.03f;
 
             var txtGo = new GameObject("text");
@@ -93,16 +97,19 @@ namespace WorldboxMP.Client.UI
             var txt = txtGo.AddComponent<Text>();
             OT.InitializeCommonText(txt);
             txt.fontSize = 18;
-            txt.alignment = TextAnchor.MiddleLeft;
+            txt.alignment = TextAnchor.MiddleCenter;   // centered horizontally
             txt.horizontalOverflow = HorizontalWrapMode.Overflow;
             txt.verticalOverflow = VerticalWrapMode.Overflow;
             txt.color = ColorFor(id4);
             txt.text = NameOf(id4);
+            var outline = txtGo.AddComponent<Outline>();
+            outline.effectColor = new Color(0f, 0f, 0f, 0.85f);
+            outline.effectDistance = new Vector2(1.4f, -1.4f);
             var trt = txt.rectTransform;
             trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one;
             trt.offsetMin = Vector2.zero; trt.offsetMax = Vector2.zero;
 
-            return new Visual { Root = root, Dot = sr, Label = txt };
+            return new Visual { Root = root, Finger = sr, Label = txt };
         }
 
         private void PruneToRoster()
@@ -132,24 +139,30 @@ namespace WorldboxMP.Client.UI
         {
             int h = id4 != null ? id4.GetHashCode() : 0;
             float hue = ((h & 0x7fffffff) % 360) / 360f;
-            return Color.HSVToRGB(hue, 0.65f, 1f);
+            return Color.HSVToRGB(hue, 0.55f, 1f);
         }
 
-        private static Sprite DotSprite()
+        private static Sprite FingerSprite()
         {
-            if (_dotSprite != null) return _dotSprite;
+            if (_fingerSprite != null) return _fingerSprite;
+            try { _fingerSprite = SpriteTextureLoader.getSprite("ui/Icons/iconGodFinger"); } catch { }
+            if (_fingerSprite == null) _fingerSprite = GenerateDot();  // fallback
+            return _fingerSprite;
+        }
+
+        private static Sprite GenerateDot()
+        {
             const int s = 16;
             var tex = new Texture2D(s, s, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
-            float r = s / 2f, cx = r, cy = r;
+            float r = s / 2f;
             for (int y = 0; y < s; y++)
                 for (int x = 0; x < s; x++)
                 {
-                    float d = Mathf.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+                    float d = Mathf.Sqrt((x - r) * (x - r) + (y - r) * (y - r));
                     tex.SetPixel(x, y, new Color(1, 1, 1, d <= r - 1 ? 1f : 0f));
                 }
             tex.Apply();
-            _dotSprite = Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 16f);
-            return _dotSprite;
+            return Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 16f);
         }
     }
 }

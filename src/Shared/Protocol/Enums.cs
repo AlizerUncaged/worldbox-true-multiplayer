@@ -44,5 +44,11 @@ namespace WorldboxMP.Shared.Protocol
 
         /// <summary>Pause / world-speed change (Config.paused / time scale).</summary>
         SimControl = 4,
+
+        /// <summary>A unit died (Actor.die).</summary>
+        Death = 5,
+
+        /// <summary>A tile caught fire / was extinguished (WorldBehaviourActionFire).</summary>
+        Fire = 6,
     }
 }

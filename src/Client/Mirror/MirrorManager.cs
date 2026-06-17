@@ -34,6 +34,7 @@ namespace WorldboxMP.Client.Mirror
 
         private readonly Dictionary<long, Actor> _kingToLocal = new Dictionary<long, Actor>();
         private static MethodInfo _clickedFinal;
+        private static MethodInfo _die;
 
         private float _streamTimer;
         private const float StreamInterval = 0.066f;   // ~15 Hz position stream
@@ -50,6 +51,7 @@ namespace WorldboxMP.Client.Mirror
             Instance = new MirrorManager();
             _clickedFinal = AccessTools.Method(typeof(PlayerControl), "clickedFinal",
                 new[] { typeof(Vector2Int), typeof(GodPower), typeof(bool) });
+            _die = AccessTools.Method(typeof(Actor), "die");
             GameHooks.Apply(harmony);
 
             var net = NetClient.Instance;
@@ -98,6 +100,18 @@ namespace WorldboxMP.Client.Mirror
             { X = tile.pos.x, Y = tile.pos.y, TileId = main.id, TopId = top != null ? top.id : "" }));
         }
 
+        public void OnKingDeath(Actor actor)
+        {
+            if (!Active || !IsKing || actor == null) return;
+            Send(MirrorKind.Death, MirrorCodec.Write(new DeathMsg { KingId = actor.id }));
+        }
+
+        public void OnKingFire(WorldTile tile, bool on)
+        {
+            if (!Active || !IsKing || tile == null) return;
+            Send(MirrorKind.Fire, MirrorCodec.Write(new FireMsg { X = tile.pos.x, Y = tile.pos.y, On = on }));
+        }
+
         // ── Incoming ────────────────────────────────────────────────────────
         private void OnMirror(MirrorMessage msg)
         {
@@ -116,6 +130,12 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.EntityState:
                     if (IsFollower) ApplyEntityState(MirrorCodec.ReadEntityState(msg.Payload));
+                    break;
+                case MirrorKind.Death:
+                    if (IsFollower) ApplyDeath(MirrorCodec.ReadDeath(msg.Payload));
+                    break;
+                case MirrorKind.Fire:
+                    if (IsFollower) ApplyFire(MirrorCodec.ReadFire(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -180,6 +200,27 @@ namespace WorldboxMP.Client.Mirror
                 var tile = World.world?.GetTile(Mathf.RoundToInt(e.X), Mathf.RoundToInt(e.Y));
                 if (tile != null) a.current_tile = tile;
             }
+        }
+
+        private void ApplyDeath(DeathMsg m)
+        {
+            var a = Resolve(m.KingId);
+            _kingToLocal.Remove(m.KingId);
+            if (a == null || _die == null) return;
+            try { _die.Invoke(a, new object[] { false, (AttackType)0, false, false }); }
+            catch (Exception e) { ModLog.Warn("ApplyDeath failed: " + e.Message); }
+        }
+
+        private void ApplyFire(FireMsg m)
+        {
+            var tile = World.world?.GetTile(m.X, m.Y);
+            if (tile == null) return;
+            try
+            {
+                if (m.On) WorldBehaviourActionFire.addFire(tile);
+                else WorldBehaviourActionFire.removeFire(tile);
+            }
+            catch (Exception e) { ModLog.Warn("ApplyFire failed: " + e.Message); }
         }
 
         private void ApplySimControl(SimControlMsg m)

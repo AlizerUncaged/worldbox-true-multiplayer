@@ -89,7 +89,7 @@ namespace WorldboxMP.Client.UI
         private void BuildLoginPanel()
         {
             _loginPanel = UiKit.MakeColumn("Login", _host, null);
-            UiKit.MakeText("h", _loginPanel.transform, "Account", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiKit.MakeText("h", _loginPanel.transform, "Account", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _userField = UiKit.MakeInput("User", _loginPanel.transform, "Username", false, 24);
             _passField = UiKit.MakeInput("Pass", _loginPanel.transform, "Password", true, 64);
             var row = UiKit.MakeRow("Buttons", _loginPanel.transform);
@@ -105,7 +105,7 @@ namespace WorldboxMP.Client.UI
         {
             _lobbyPanel = UiKit.MakeColumn("Lobby", _host, null);
 
-            UiKit.MakeText("ch", _lobbyPanel.transform, "Create a room", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiKit.MakeText("ch", _lobbyPanel.transform, "Create a room", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _roomNameField = UiKit.MakeInput("RName", _lobbyPanel.transform, "Room name", false, 40);
             _roomPassField = UiKit.MakeInput("RPass", _lobbyPanel.transform, "Password (optional, max 16)", false, 16);
             var trow = UiKit.MakeRow("TRow", _lobbyPanel.transform);
@@ -119,7 +119,7 @@ namespace WorldboxMP.Client.UI
                 Net.CreateRoom(_roomNameField.text, _roomPassField.text,
                     _unlistedToggle.isOn ? RoomVisibility.Unlisted : RoomVisibility.Public), UiKit.ButtonRed);
 
-            UiKit.MakeText("jh", _lobbyPanel.transform, "Join by code", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiKit.MakeText("jh", _lobbyPanel.transform, "Join by code", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             var jrow = UiKit.MakeRow("JRow", _lobbyPanel.transform);
             _joinIdField = UiKit.MakeInput("JId", jrow.transform, "CODE", false, 4);
             _joinPassField = UiKit.MakeInput("JPass", jrow.transform, "Password", false, 16);
@@ -139,16 +139,16 @@ namespace WorldboxMP.Client.UI
             UiKit.MakeButton("Logs", brow.transform, "Logs", () => Net.RequestLogs(), UiKit.ButtonGrey);
             UiKit.MakeButton("Resync", brow.transform, "Resync", () => Mirror.MirrorManager.Instance?.ForceSnapshotToAll(), UiKit.ButtonGrey);
             UiKit.MakeButton("Leave", brow.transform, "Leave", () => Net.LeaveRoom(), UiKit.ButtonRed);
-            UiKit.MakeText("plh", _roomPanel.transform, "Players", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiKit.MakeText("plh", _roomPanel.transform, "Players", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _rosterContainer = UiKit.MakeColumn("Roster", _roomPanel.transform, null, 3f, new RectOffset(0, 0, 0, 0));
-            UiKit.MakeText("lgh", _roomPanel.transform, "Logs", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiKit.MakeText("lgh", _roomPanel.transform, "Logs", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _logContainer = UiKit.MakeColumn("LogList", _roomPanel.transform, null, 1f, new RectOffset(0, 0, 0, 0));
         }
 
         private void BuildSettingsPanel()
         {
             _settingsPanel = UiKit.MakeColumn("Settings", _host, null);
-            UiKit.MakeText("sh", _settingsPanel.transform, "Server", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiKit.MakeText("sh", _settingsPanel.transform, "Server", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _hostField = UiKit.MakeInput("Host", _settingsPanel.transform, "Host (e.g. 127.0.0.1)", false, 64);
             _portField = UiKit.MakeInput("Port", _settingsPanel.transform, "Port", false, 6);
             _portField.contentType = InputField.ContentType.IntegerNumber;

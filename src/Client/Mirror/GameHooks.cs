@@ -35,6 +35,14 @@ namespace WorldboxMP.Client.Mirror
                 if (terraform != null)
                     harmony.Patch(terraform, postfix: H(nameof(Terraform_Postfix)));
 
+                var die = AccessTools.Method(typeof(Actor), "die");
+                if (die != null) harmony.Patch(die, postfix: H(nameof(Die_Postfix)));
+
+                var addFire = AccessTools.Method(typeof(WorldBehaviourActionFire), "addFire");
+                if (addFire != null) harmony.Patch(addFire, postfix: H(nameof(AddFire_Postfix)));
+                var removeFire = AccessTools.Method(typeof(WorldBehaviourActionFire), "removeFire");
+                if (removeFire != null) harmony.Patch(removeFire, postfix: H(nameof(RemoveFire_Postfix)));
+
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
@@ -61,6 +69,21 @@ namespace WorldboxMP.Client.Mirror
         private static void Terraform_Postfix(WorldTile pTile, TileType pNewTypeMain, TopTileType pTopType)
         {
             MirrorManager.Instance?.OnKingTerraform(pTile, pNewTypeMain, pTopType);
+        }
+
+        private static void Die_Postfix(Actor __instance)
+        {
+            MirrorManager.Instance?.OnKingDeath(__instance);
+        }
+
+        private static void AddFire_Postfix(WorldTile pTile)
+        {
+            MirrorManager.Instance?.OnKingFire(pTile, true);
+        }
+
+        private static void RemoveFire_Postfix(WorldTile pTile)
+        {
+            MirrorManager.Instance?.OnKingFire(pTile, false);
         }
 
         // Suppress autonomous AI decisions on followers (king is authoritative).

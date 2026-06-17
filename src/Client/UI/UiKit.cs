@@ -15,6 +15,8 @@ namespace WorldboxMP.Client.UI
         public static readonly Color ButtonRed = new Color(0.78f, 0.25f, 0.22f, 1f);
         public static readonly Color ButtonGrey = new Color(0.32f, 0.34f, 0.38f, 1f);
         public static readonly Color InputBg = new Color(0.08f, 0.085f, 0.10f, 1f);
+        // WorldBox's signature header orange (#F3961F).
+        public static readonly Color Orange = new Color(0.953f, 0.588f, 0.122f, 1f);
 
         public static GameObject MakeRect(string name, Transform parent)
         {
@@ -56,7 +58,7 @@ namespace WorldboxMP.Client.UI
         }
 
         public static Text MakeText(string name, Transform parent, string text, int size = 13,
-            TextAnchor align = TextAnchor.MiddleLeft, FontStyle style = FontStyle.Normal)
+            TextAnchor align = TextAnchor.MiddleLeft, FontStyle style = FontStyle.Normal, Color? color = null)
         {
             var go = MakeRect(name, parent);
             var t = go.AddComponent<Text>();
@@ -65,8 +67,13 @@ namespace WorldboxMP.Client.UI
             t.fontSize = size;
             t.alignment = align;
             t.fontStyle = style;
+            t.color = color ?? Color.white;
             t.horizontalOverflow = HorizontalWrapMode.Wrap;
             t.verticalOverflow = VerticalWrapMode.Overflow;
+            // Native WorldBox text has a dark outline.
+            var outline = go.AddComponent<Outline>();
+            outline.effectColor = new Color(0f, 0f, 0f, 0.85f);
+            outline.effectDistance = new Vector2(1.2f, -1.2f);
             return t;
         }
 
