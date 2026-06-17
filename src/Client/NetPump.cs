@@ -46,6 +46,16 @@ namespace WorldboxMP.Client
 
             if (Input.GetKeyDown(KeyCode.F9))
                 MultiplayerWindow.Toggle();
+
+#if DEBUG
+            // Camera/zoom diagnostics: log the exact zoom+LOD state whenever the wheel
+            // is scrolled (so we can see if scroll input even reaches this client, and
+            // whether _target_zoom moves) and on demand via F10.
+            if (Mathf.Abs(Input.mouseScrollDelta.y) > 0.01f)
+                Dev.CameraDiag.Dump($"scroll dy={Input.mouseScrollDelta.y:F2}");
+            if (Input.GetKeyDown(KeyCode.F10))
+                Dev.CameraDiag.Dump("F10");
+#endif
         }
 
         private void OnApplicationQuit() => NetClient.Instance?.Stop();
