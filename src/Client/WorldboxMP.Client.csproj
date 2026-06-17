@@ -15,6 +15,8 @@
     <GameDir>$(MSBuildProjectDirectory)\..\..\..\..</GameDir>
     <ManagedDir>$(GameDir)\worldbox_Data\Managed</ManagedDir>
     <ModsDir>$(GameDir)\worldbox_Data\StreamingAssets\mods</ModsDir>
+    <!-- Live mod folder NML scans. Debug builds auto-deploy the whole output here. -->
+    <DeployDir>$(GameDir)\Mods\WorldBoxMultiplayer</DeployDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -95,5 +97,17 @@
       <LogicalName>settings-icon.png</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
+
+  <!-- Debug auto-deploy: copy the WHOLE client output (Client + Shared + LiteNetLib +
+       mod.json) into the live Mods folder so deploys never go out of sync. -->
+  <Target Name="DeployToMods" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <ItemGroup>
+      <_DeployFiles Include="$(OutDir)*.dll" />
+      <_DeployFiles Include="$(OutDir)mod.json" Condition="Exists('$(OutDir)mod.json')" />
+    </ItemGroup>
+    <MakeDir Directories="$(DeployDir)" />
+    <Copy SourceFiles="@(_DeployFiles)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="false" />
+    <Message Importance="high" Text="[WBMP] Deployed client -> $(DeployDir)" />
+  </Target>
 
 </Project>

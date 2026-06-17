@@ -9,6 +9,9 @@
     <ApplicationIcon>icon.ico</ApplicationIcon>
     <Product>WorldBox Multiplayer Server</Product>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- WorldBox root: Projects/Worldbox-Multiplayer/src/Server -> up 4. Debug builds
+         auto-deploy the full framework-dependent output here for the user to run. -->
+    <ServerDeployDir>$(MSBuildProjectDirectory)\..\..\..\..\Server</ServerDeployDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,5 +23,21 @@
   <ItemGroup>
     <ProjectReference Include="..\Shared\WorldboxMP.Shared.csproj" />
   </ItemGroup>
+
+  <!-- Debug auto-deploy: copy the whole framework-dependent output (exe + all deps +
+       deps.json + runtimeconfig.json) into worldbox/Server so it's ready to run. -->
+  <Target Name="DeployServer" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <ItemGroup>
+      <_ServerOut Include="$(OutDir)**\*.*" />
+    </ItemGroup>
+    <MakeDir Directories="$(ServerDeployDir)" />
+    <!-- ContinueOnError: if the server is currently running it locks these DLLs; don't
+         fail the build — just warn so the user knows to stop it to pick up the new build. -->
+    <Copy SourceFiles="@(_ServerOut)"
+          DestinationFiles="@(_ServerOut->'$(ServerDeployDir)\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          ContinueOnError="WarnAndContinue" />
+    <Message Importance="high" Text="[WBMP] Deployed server -> $(ServerDeployDir) (if you saw copy warnings above, stop the running server and rebuild)." />
+  </Target>
 
 </Project>

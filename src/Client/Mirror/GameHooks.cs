@@ -155,13 +155,20 @@ namespace WorldboxMP.Client.Mirror
                 // authority; followers must not run cleanup/cities/kingdoms/wars/etc. (which
                 // crash on the partially-mirrored state and diverge). Keeps updateActors
                 // (movement interp) + updateBuildings (render, guarded) + updateMapLayers.
-                _mbUpdateActors    = AccessTools.Method(typeof(MapBox), "updateActors", new[] { typeof(float) });
                 _mbUpdateBuildings = AccessTools.Method(typeof(MapBox), "updateBuildings", new[] { typeof(float) });
                 _mbUpdateMapLayers = AccessTools.Method(typeof(MapBox), "updateMapLayers", new[] { typeof(float) });
                 _animUpdateTime    = AccessTools.Method(typeof(AnimationHelper), "updateTime", new[] { typeof(float), typeof(float) });
                 _enemiesClear      = AccessTools.Method(typeof(EnemiesFinder), "clear");
+                // Full actor pipeline (the order updateSimulation uses) so movement isn't
+                // starved: refresh container → meta prep → visibility → batch update
+                // (movement/render) → destroy (death cleanup). ActorManager = units.
+                _unitsCheckContainer = AccessTools.Method(typeof(ActorManager), "checkContainer");
+                _unitsPrepMeta       = AccessTools.Method(typeof(ActorManager), "prepareForMetaChecks");
+                _unitsCalcVisible    = AccessTools.Method(typeof(ActorManager), "calculateVisibleActors");
+                _unitsUpdate         = AccessTools.Method(typeof(ActorManager), "update", new[] { typeof(float) });
+                _unitsCheckDestroy   = AccessTools.Method(typeof(ActorManager), "checkObjectsToDestroy");
                 var sim = AccessTools.Method(typeof(MapBox), "updateSimulation", new[] { typeof(float) });
-                if (sim != null && _mbUpdateActors != null) harmony.Patch(sim, prefix: H(nameof(PassiveSim_Prefix)));
+                if (sim != null && _unitsUpdate != null) harmony.Patch(sim, prefix: H(nameof(PassiveSim_Prefix)));
 
                 _buildingAssetField = AccessTools.Field(typeof(Building), "asset");
                 _buildingComponentsField = AccessTools.Field(typeof(Building), "components_list");
@@ -402,29 +409,44 @@ namespace WorldboxMP.Client.Mirror
         private static FieldInfo _buildingComponentsField;
         private static int _suppressedBuilds;
 
-        private static MethodInfo _mbUpdateActors, _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear;
+        private static MethodInfo _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear;
+        private static MethodInfo _unitsCheckContainer, _unitsPrepMeta, _unitsCalcVisible, _unitsUpdate, _unitsCheckDestroy;
         private static bool _passiveLogged;
 
-        // Follower runs ONLY the visual subset of the simulation; the king drives all
-        // autonomous world changes. This skips updateDirtyMetaContainersAndCleanup,
-        // cities/kingdoms/wars/cultures/drops/etc. — the systems that NRE on partially
-        // mirrored state and would diverge from the king.
+        // Follower runs ONLY the visual + actor subset of the simulation at the king's
+        // tick rate; the king drives all autonomous world changes. Skips
+        // cities/kingdoms/wars/cultures/drops/etc. Each subcall is isolated so one bad
+        // entity (e.g. a not-yet-synced null kingdom) can't stall the frame.
         private static bool PassiveSim_Prefix(MapBox __instance, float pElapsed)
         {
             var m = MirrorManager.Instance;
             if (m == null || !m.IsFollower) return true; // king/idle: full simulation
-            try
+
+            float dt = Time.fixedDeltaTime;
+            Safe(_enemiesClear, null, null);
+            Safe(_animUpdateTime, null, new object[] { pElapsed, dt });
+            Safe(_mbUpdateMapLayers, __instance, new object[] { pElapsed });   // water/lava/anim layers
+            var units = World.world != null ? World.world.units : null;
+            if (units != null)
             {
-                float dt = Time.fixedDeltaTime;
-                _enemiesClear?.Invoke(null, null);
-                _animUpdateTime?.Invoke(null, new object[] { pElapsed, dt });
-                _mbUpdateMapLayers?.Invoke(__instance, new object[] { pElapsed }); // water/lava/anim layers
-                _mbUpdateActors?.Invoke(__instance, new object[] { pElapsed });     // movement interp + actor render
-                _mbUpdateBuildings?.Invoke(__instance, new object[] { pElapsed });  // building render (guarded)
-                if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (movement+render only; king is authoritative)."); }
+                Safe(_unitsCheckContainer, units, null);                       // refresh actor batch
+                Safe(_unitsPrepMeta, units, null);                            // build alive/wild/civ lists
+                Safe(_unitsCalcVisible, units, null);                         // visibility (needed by update)
+                Safe(_unitsUpdate, units, new object[] { pElapsed });          // movement interp + render + animation
+                Safe(_unitsCheckDestroy, units, null);                        // finalize corpses (death)
             }
-            catch (Exception e) { if (!_passiveLogged) { _passiveLogged = true; ModLog.Warn("[FOLLOWER] passive sim subcall failed: " + e.Message); } }
+            Safe(_mbUpdateBuildings, __instance, new object[] { pElapsed });   // building render (guarded elsewhere)
+
+            if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
+        }
+
+        private static int _passiveErrs;
+        private static void Safe(MethodInfo mi, object inst, object[] args)
+        {
+            if (mi == null) return;
+            try { mi.Invoke(inst, args); }
+            catch (Exception e) { if (_passiveErrs < 6) { _passiveErrs++; ModLog.Warn($"[FOLLOWER] passive {mi.Name} skipped: " + (e.InnerException ?? e).Message); } }
         }
 
         // Stop the follower from autonomously constructing buildings (king is authoritative).
