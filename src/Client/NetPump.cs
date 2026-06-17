@@ -13,6 +13,8 @@ namespace WorldboxMP.Client
     {
         private float _reconnectTimer;
         private const float ReconnectInterval = 5f;
+        private float _pingTimer;
+        private const float PingInterval = 1f;
 
         public static void Spawn()
         {
@@ -40,6 +42,10 @@ namespace WorldboxMP.Client
                 }
             }
             else _reconnectTimer = 0f;
+
+            // Round-trip ping probe (~1/s) — measures originator→king→originator latency.
+            _pingTimer += Time.unscaledDeltaTime;
+            if (_pingTimer >= PingInterval) { _pingTimer = 0f; net.SendPing(); }
 
             // Lazily create the tab when the powers UI is available.
             MultiplayerTab.TryCreate();

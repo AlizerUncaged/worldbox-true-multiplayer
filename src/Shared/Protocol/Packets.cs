@@ -226,6 +226,32 @@ namespace WorldboxMP.Shared.Protocol
     }
 
     /// <summary>
+    /// Round-trip latency probe. Originator → server → room king. The server stamps
+    /// <see cref="OriginId4"/> with the sender. <see cref="ClientTicks"/> is the
+    /// originator's Stopwatch timestamp, echoed back unchanged so it can compute the
+    /// full round-trip without keeping state.
+    /// </summary>
+    public class PingProbe : INetSerializable
+    {
+        public string OriginId4 = "";
+        public int Seq;
+        public long ClientTicks;
+        public void Serialize(NetDataWriter w) { w.Put(OriginId4); w.Put(Seq); w.Put(ClientTicks); }
+        public void Deserialize(NetDataReader r) { OriginId4 = r.GetString(); Seq = r.GetInt(); ClientTicks = r.GetLong(); }
+    }
+
+    /// <summary>King → server → originator: echo of a <see cref="PingProbe"/>. The server
+    /// routes it back to the session named by <see cref="OriginId4"/>.</summary>
+    public class PongReply : INetSerializable
+    {
+        public string OriginId4 = "";
+        public int Seq;
+        public long ClientTicks;
+        public void Serialize(NetDataWriter w) { w.Put(OriginId4); w.Put(Seq); w.Put(ClientTicks); }
+        public void Deserialize(NetDataReader r) { OriginId4 = r.GetString(); Seq = r.GetInt(); ClientTicks = r.GetLong(); }
+    }
+
+    /// <summary>
     /// Server → king: "a player just joined; please produce a world snapshot for them."
     /// </summary>
     public class SnapshotRequest : INetSerializable

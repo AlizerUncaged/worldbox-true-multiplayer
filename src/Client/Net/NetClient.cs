@@ -97,6 +97,7 @@ namespace WorldboxMP.Client.Net
             LoggedIn = false; Id4 = ""; Username = "";
             RoomId = ""; RoomName = ""; MyRole = RoomRole.Player;
             Roster.Clear(); RoomList.Clear(); Logs.Clear();
+            LastPingMs = -1;
         }
 
         // ── Outgoing API ────────────────────────────────────────────────────
@@ -147,6 +148,33 @@ namespace WorldboxMP.Client.Net
             _proc.SubscribeNetSerializable<MirrorMessage>(p => OnMirror?.Invoke(p));
             _proc.SubscribeNetSerializable<SnapshotRequest>(p => OnSnapshotRequested?.Invoke(p));
             _proc.SubscribeNetSerializable<WorldSnapshot>(p => OnSnapshotReceived?.Invoke(p));
+            _proc.SubscribeNetSerializable<PingProbe>(OnPingProbe);
+            _proc.SubscribeNetSerializable<PongReply>(OnPongReply);
+        }
+
+        // ── Round-trip ping (originator → server → king → server → originator) ──────
+        /// <summary>Last measured round-trip latency in ms (-1 until a reply arrives).</summary>
+        public int LastPingMs { get; private set; } = -1;
+        private int _pingSeq;
+
+        /// <summary>Send a ping probe (call ~1/s). The server routes it to the room king.</summary>
+        public void SendPing()
+        {
+            if (State != ConnState.Connected || !LoggedIn) return;
+            Send(new PingProbe { Seq = ++_pingSeq, ClientTicks = System.Diagnostics.Stopwatch.GetTimestamp() },
+                 DeliveryMethod.ReliableOrdered);
+        }
+
+        // We only receive a probe if the server picked us as the room king → echo it back.
+        private void OnPingProbe(PingProbe p) =>
+            Send(new PongReply { OriginId4 = p.OriginId4, Seq = p.Seq, ClientTicks = p.ClientTicks });
+
+        // Our probe came back full circle → compute elapsed from the echoed timestamp.
+        private void OnPongReply(PongReply p)
+        {
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            double ms = (now - p.ClientTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            LastPingMs = ms < 0 ? 0 : (int)System.Math.Round(ms);
         }
 
         /// <summary>King → server → joiner: ship the current world snapshot.</summary>

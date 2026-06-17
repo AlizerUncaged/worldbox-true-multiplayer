@@ -102,6 +102,8 @@ namespace WorldboxMP.Server.Net
             _proc.SubscribeNetSerializable<LogListRequest, NetPeer>(OnLogList);
             _proc.SubscribeNetSerializable<MirrorMessage, NetPeer>(OnMirror);
             _proc.SubscribeNetSerializable<WorldSnapshot, NetPeer>(OnWorldSnapshot);
+            _proc.SubscribeNetSerializable<PingProbe, NetPeer>(OnPingProbe);
+            _proc.SubscribeNetSerializable<PongReply, NetPeer>(OnPongReply);
         }
 
         private Session SessionOf(NetPeer peer) => _sessions.TryGetValue(peer, out var s) ? s : null;
@@ -299,6 +301,24 @@ namespace WorldboxMP.Server.Net
                     break;
                 // EntityState: intentionally not logged (high frequency).
             }
+        }
+
+        // Round-trip ping: stamp the originator and forward to the room's king.
+        private void OnPingProbe(PingProbe p, NetPeer peer)
+        {
+            var s = SessionOf(peer); if (s == null || s.CurrentRoom == null) return;
+            p.OriginId4 = s.Id4;
+            var king = s.CurrentRoom.GetKing();
+            king?.Session.Peer.Send(_proc, p, DeliveryMethod.ReliableOrdered);
+        }
+
+        // King's echo → route back to the originating player.
+        private void OnPongReply(PongReply p, NetPeer peer)
+        {
+            var s = SessionOf(peer); if (s == null || s.CurrentRoom == null) return;
+            if (s.CurrentRoom.KingId4 != s.Id4) return; // only the king answers probes
+            var target = s.CurrentRoom.Get(p.OriginId4);
+            target?.Session.Peer.Send(_proc, p, DeliveryMethod.ReliableOrdered);
         }
 
         private void OnWorldSnapshot(WorldSnapshot snap, NetPeer peer)

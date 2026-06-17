@@ -75,6 +75,11 @@ namespace WorldboxMP.Client.Mirror
         // ongoing sync is granular (spawns, births, deaths, terrain, fire, traits, …).
         public float PeriodicSnapshotSeconds = 0f;
         private bool _lastPaused;
+        private string _lastSpeedId = "";
+        private static string SafeSpeedId()
+        {
+            try { return Config.time_scale_asset != null ? Config.time_scale_asset.id : ""; } catch { return ""; }
+        }
 
         public static void Init(Harmony harmony)
         {
@@ -476,6 +481,7 @@ namespace WorldboxMP.Client.Mirror
                 {
                     var a = Resolve(m.KingId);
                     if (a == null) continue;
+                    if (!a.isAlive()) continue;   // don't walk a corpse (death + a stale move in the same batch)
                     var tile = World.world?.GetTile(m.X, m.Y);
                     if (tile == null) continue;
                     // Replay the exact step: the game registers the actor as moving,
@@ -718,11 +724,13 @@ namespace WorldboxMP.Client.Mirror
             if (!Active || !IsKing) return;
 
             bool paused = SafePaused();
-            if (paused != _lastPaused)
+            string speed = SafeSpeedId();
+            // Broadcast on pause OR speed change — the follower runs a passive sim, so it
+            // must match the king's game speed (ticks/frame) or movement replays too slow.
+            if (paused != _lastPaused || speed != _lastSpeedId)
             {
                 _lastPaused = paused;
-                string speed = "";
-                try { speed = Config.time_scale_asset != null ? Config.time_scale_asset.id : ""; } catch { }
+                _lastSpeedId = speed;
                 Send(MirrorKind.SimControl, MirrorCodec.Write(new SimControlMsg { Paused = paused, SpeedId = speed }));
             }
 
@@ -763,6 +771,9 @@ namespace WorldboxMP.Client.Mirror
             if (!IsKing) return;
             var data = WorldSync.Save();
             if (data.Length > 0) NetClient.Instance.SendSnapshot(req.ForId4, data);
+            // Make the joiner adopt our current game speed/pause immediately (so their
+            // passive sim replays movement at the right rate). Re-broadcast next Pump.
+            _lastSpeedId = "\0"; _lastPaused = !SafePaused();
         }
 
         private void OnSnapshotReceived(WorldSnapshot snap)
