@@ -67,6 +67,31 @@ namespace WorldboxMP.Client.Mirror
                 var setName = AccessTools.Method(typeof(NanoObject), "setName", new[] { typeof(string), typeof(bool) });
                 if (setName != null) harmony.Patch(setName, postfix: H(nameof(SetName_Postfix)));
 
+                // Combat / health.
+                var getHit = AccessTools.Method(typeof(Actor), "getHit");
+                if (getHit != null) harmony.Patch(getHit, postfix: H(nameof(GetHit_Postfix)));
+
+                // Status effects.
+                var addStatus = AccessTools.Method(typeof(Actor), "addStatusEffect", new[] { typeof(StatusAsset), typeof(float), typeof(bool) });
+                if (addStatus != null) harmony.Patch(addStatus, postfix: H(nameof(AddStatus_Postfix)));
+                var finishStatus = AccessTools.Method(typeof(BaseSimObject), "finishStatusEffect", new[] { typeof(string) });
+                if (finishStatus != null) harmony.Patch(finishStatus, postfix: H(nameof(FinishStatus_Postfix)));
+
+                // Equipment.
+                var setItem = AccessTools.Method(typeof(ActorEquipment), "setItem", new[] { typeof(Item), typeof(Actor) });
+                if (setItem != null) harmony.Patch(setItem, postfix: H(nameof(SetItem_Postfix)));
+
+                // Structural object creation (kingdom/city/war/alliance/plot/religion/culture/language/building).
+                PatchCreate(harmony, typeof(KingdomManager), "makeNewCivKingdom", typeof(Kingdom));
+                PatchCreate(harmony, typeof(CityManager), "newCity", typeof(City));
+                PatchCreate(harmony, typeof(WarManager), "newWar", typeof(War));
+                PatchCreate(harmony, typeof(AllianceManager), "newAlliance", typeof(Alliance));
+                PatchCreate(harmony, typeof(PlotManager), "newPlot", typeof(Plot));
+                PatchCreate(harmony, typeof(ReligionManager), "newReligion", typeof(Religion));
+                PatchCreate(harmony, typeof(CultureManager), "newCulture", typeof(Culture));
+                PatchCreate(harmony, typeof(LanguageManager), "newLanguage", typeof(Language));
+                PatchCreate(harmony, typeof(BuildingManager), "addBuilding", typeof(Building));
+
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
@@ -85,6 +110,20 @@ namespace WorldboxMP.Client.Mirror
         }
 
         private static HarmonyMethod H(string name) => new HarmonyMethod(typeof(GameHooks), name);
+
+        /// <summary>Patch the creation method whose return type IS the created object (skips void overloads).</summary>
+        private static void PatchCreate(Harmony harmony, Type managerType, string method, Type objType)
+        {
+            try
+            {
+                MethodInfo found = null;
+                foreach (var mi in managerType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+                    if (mi.Name == method && objType.IsAssignableFrom(mi.ReturnType)) { found = mi; break; }
+                if (found != null) harmony.Patch(found, postfix: H(nameof(StructuralCreate_Postfix)));
+                else ModLog.Warn($"PatchCreate: no {managerType.Name}.{method} returning {objType.Name}");
+            }
+            catch (Exception e) { ModLog.Warn($"PatchCreate {managerType.Name}.{method} failed: " + e.Message); }
+        }
 
         private static FieldInfo _preloadOps;
 
@@ -132,6 +171,31 @@ namespace WorldboxMP.Client.Mirror
         private static void SetName_Postfix(NanoObject __instance, string pName)
         {
             if (__instance is Actor a) MirrorManager.Instance?.OnKingRename(a, pName);
+        }
+
+        private static void GetHit_Postfix(Actor __instance)
+        {
+            MirrorManager.Instance?.OnKingHealth(__instance);
+        }
+
+        private static void AddStatus_Postfix(Actor __instance, StatusAsset pStatusAsset, float pOverrideTimer)
+        {
+            if (pStatusAsset != null) MirrorManager.Instance?.OnKingStatus(__instance, pStatusAsset.id, pOverrideTimer, true);
+        }
+
+        private static void FinishStatus_Postfix(BaseSimObject __instance, string pID)
+        {
+            if (__instance is Actor a) MirrorManager.Instance?.OnKingStatus(a, pID, 0f, false);
+        }
+
+        private static void SetItem_Postfix(Item pItem, Actor pActor)
+        {
+            MirrorManager.Instance?.OnKingEquip(pActor, pItem);
+        }
+
+        private static void StructuralCreate_Postfix(object __result)
+        {
+            MirrorManager.Instance?.OnKingObject(__result);
         }
 
         private static void AddTrait_Postfix(Actor __instance, string pTraitID)

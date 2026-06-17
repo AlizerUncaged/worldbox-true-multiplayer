@@ -69,5 +69,21 @@ namespace WorldboxMP.Shared.Protocol
 
         /// <summary>An actor was renamed (NanoObject.setName).</summary>
         Rename = 11,
+
+        /// <summary>Combat: an actor's health changed (Actor.getHit).</summary>
+        Health = 12,
+
+        /// <summary>A status effect was added/removed (addStatusEffect/finishStatusEffect).</summary>
+        Status = 13,
+
+        /// <summary>An item was equipped (ActorEquipment.setItem) — carries ItemData.</summary>
+        Equip = 14,
+
+        /// <summary>
+        /// A structural object was created (kingdom/city/war/alliance/plot/religion/
+        /// culture/language/building). Carries a kind tag + serialized XData; followers
+        /// rebuild it via the matching manager.loadObject.
+        /// </summary>
+        Object = 15,
     }
 }

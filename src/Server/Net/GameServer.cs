@@ -255,6 +255,27 @@ namespace WorldboxMP.Server.Net
                     LogC($"[{room}] {s.Username} trait {(tt.Add ? "+" : "-")}{tt.TraitId} #{tt.KingId}",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("trait")} {Val((tt.Add ? "+" : "-") + tt.TraitId)} {Dim("#" + tt.KingId)}");
                     break;
+                case MirrorKind.Object:
+                    var om = MirrorCodec.ReadObject(msg.Payload);
+                    LogC($"[{room}] {s.Username} structural kind={om.Kind} ({om.Json.Length}B)",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("object")} {Val("kind " + om.Kind)} {Dim(om.Json.Length + "B")}");
+                    break;
+                case MirrorKind.Equip:
+                    var em = MirrorCodec.ReadEquip(msg.Payload);
+                    LogC($"[{room}] {s.Username} equip #{em.ActorId}",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("equip")} {Dim("#" + em.ActorId)}");
+                    break;
+                case MirrorKind.Rename:
+                    var rn = MirrorCodec.ReadRename(msg.Payload);
+                    LogC($"[{room}] {s.Username} rename #{rn.Id} -> {rn.Name}",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("rename")} {Dim("#" + rn.Id)} {Val(rn.Name)}");
+                    break;
+                case MirrorKind.Time:
+                    var tm = MirrorCodec.ReadTime(msg.Payload);
+                    LogC($"[{room}] {s.Username} year-sync t={tm.WorldTime:F0}",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("time")} {Dim("t=" + tm.WorldTime.ToString("F0"))}");
+                    break;
+                // Health/Status are high-frequency → not logged.
                 case MirrorKind.SimControl:
                     var sc = MirrorCodec.ReadSimControl(msg.Payload);
                     LogC($"[{room}] {s.Username} sim paused={sc.Paused} speed={sc.SpeedId}",

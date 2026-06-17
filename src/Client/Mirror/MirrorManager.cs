@@ -45,6 +45,13 @@ namespace WorldboxMP.Client.Mirror
         private static FieldInfo _mapStatsField;    // MapBox.map_stats is internal
         private static FieldInfo _worldTimeField;   // MapStats.world_time (public field, reached via internal map_stats)
         private static MethodInfo _mapStatsLoad;    // MapStats.load() refreshes year cache
+        private static FieldInfo _itemDataField;    // Item.data is internal
+        private static MethodInfo _addStatusMethod; // Actor.addStatusEffect(string,float,bool) is internal
+
+        // Registry of structural objects synced generically (Data + manager.loadObject).
+        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; }
+        private static readonly List<ObjReg> _objReg = new List<ObjReg>();
+        private bool _applyingStatus, _applyingEquip, _applyingObject;
 
         // Movement is event-based: the king's per-tile moveTo commits are collected
         // here and flushed once per frame (no polling/interval).
@@ -72,6 +79,9 @@ namespace WorldboxMP.Client.Mirror
             _mapStatsField = AccessTools.Field(typeof(MapBox), "map_stats");
             _worldTimeField = AccessTools.Field(typeof(MapStats), "world_time");
             _mapStatsLoad = AccessTools.Method(typeof(MapStats), "load");
+            _itemDataField = AccessTools.Field(typeof(Item), "data");
+            _addStatusMethod = AccessTools.Method(typeof(Actor), "addStatusEffect", new[] { typeof(string), typeof(float), typeof(bool) });
+            BuildObjectRegistry();
             GameHooks.Apply(harmony);
 
             var net = NetClient.Instance;
@@ -172,6 +182,65 @@ namespace WorldboxMP.Client.Mirror
             Send(MirrorKind.WorldLaw, MirrorCodec.Write(new WorldLawMsg { Id = id, Value = value }));
         }
 
+        private static void BuildObjectRegistry()
+        {
+            void Reg(byte kind, Type obj, Type data, Func<object> mgr) =>
+                _objReg.Add(new ObjReg { Kind = kind, ObjType = obj, DataType = data, Mgr = mgr, DataField = AccessTools.Field(obj, "data") });
+            Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
+            Reg(2, typeof(City), typeof(CityData), () => World.world.cities);
+            Reg(3, typeof(War), typeof(WarData), () => World.world.wars);
+            Reg(4, typeof(Alliance), typeof(AllianceData), () => World.world.alliances);
+            Reg(5, typeof(Plot), typeof(PlotData), () => World.world.plots);
+            Reg(6, typeof(Religion), typeof(ReligionData), () => World.world.religions);
+            Reg(7, typeof(Culture), typeof(CultureData), () => World.world.cultures);
+            Reg(8, typeof(Language), typeof(LanguageData), () => World.world.languages);
+            Reg(9, typeof(Building), typeof(BuildingData), () => World.world.buildings);
+        }
+
+        public void OnKingHealth(Actor a)
+        {
+            if (!Active || !IsKing || a == null) return;
+            var data = _actorDataField?.GetValue(a) as ActorData;
+            if (data != null) Send(MirrorKind.Health, MirrorCodec.Write(new HealthMsg { Id = a.id, Health = data.health }));
+        }
+
+        public void OnKingStatus(Actor a, string statusId, float timer, bool add)
+        {
+            if (!Active || !IsKing || _applyingStatus || a == null || string.IsNullOrEmpty(statusId)) return;
+            Send(MirrorKind.Status, MirrorCodec.Write(new StatusMsg { Id = a.id, StatusId = statusId, Timer = timer, Add = add }));
+        }
+
+        public void OnKingEquip(Actor a, Item item)
+        {
+            if (!Active || !IsKing || _applyingEquip || a == null || item == null) return;
+            try
+            {
+                var data = _itemDataField?.GetValue(item);
+                if (data == null) return;
+                Send(MirrorKind.Equip, MirrorCodec.Write(new EquipMsg
+                { ActorId = a.id, ItemJson = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
+            }
+            catch (Exception e) { ModLog.Warn("OnKingEquip failed: " + e.Message); }
+        }
+
+        public void OnKingObject(object obj)
+        {
+            if (!Active || !IsKing || _applyingObject || obj == null) return;
+            try
+            {
+                foreach (var r in _objReg)
+                    if (r.ObjType.IsInstanceOfType(obj))
+                    {
+                        var data = r.DataField?.GetValue(obj);
+                        if (data == null) return;
+                        Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg
+                        { Kind = r.Kind, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
+                        return;
+                    }
+            }
+            catch (Exception e) { ModLog.Warn("OnKingObject failed: " + e.Message); }
+        }
+
         public void OnKingYear()
         {
             if (!Active || !IsKing) return;
@@ -222,6 +291,18 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.Rename:
                     if (IsFollower) ApplyRename(MirrorCodec.ReadRename(msg.Payload));
+                    break;
+                case MirrorKind.Health:
+                    if (IsFollower) ApplyHealth(MirrorCodec.ReadHealth(msg.Payload));
+                    break;
+                case MirrorKind.Status:
+                    if (IsFollower) ApplyStatus(MirrorCodec.ReadStatus(msg.Payload));
+                    break;
+                case MirrorKind.Equip:
+                    if (IsFollower) ApplyEquip(MirrorCodec.ReadEquip(msg.Payload));
+                    break;
+                case MirrorKind.Object:
+                    if (IsFollower) ApplyObject(MirrorCodec.ReadObject(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -325,6 +406,63 @@ namespace WorldboxMP.Client.Mirror
                 else WorldBehaviourActionFire.removeFire(tile);
             }
             catch (Exception e) { ModLog.Warn("ApplyFire failed: " + e.Message); }
+        }
+
+        private void ApplyHealth(HealthMsg m)
+        {
+            var a = Resolve(m.Id);
+            if (a == null) return;
+            try { var data = _actorDataField?.GetValue(a) as ActorData; if (data != null) data.health = m.Health; }
+            catch (Exception e) { ModLog.Warn("ApplyHealth failed: " + e.Message); }
+        }
+
+        private void ApplyStatus(StatusMsg m)
+        {
+            var a = Resolve(m.Id);
+            if (a == null) return;
+            _applyingStatus = true;
+            try
+            {
+                if (m.Add) _addStatusMethod?.Invoke(a, new object[] { m.StatusId, m.Timer, true });
+                else a.finishStatusEffect(m.StatusId);
+            }
+            catch (Exception e) { ModLog.Warn("ApplyStatus failed: " + e.Message); }
+            finally { _applyingStatus = false; }
+        }
+
+        private void ApplyEquip(EquipMsg m)
+        {
+            var a = Resolve(m.ActorId);
+            if (a == null || string.IsNullOrEmpty(m.ItemJson)) return;
+            _applyingEquip = true;
+            try
+            {
+                var itemData = (ItemData)JsonConvert.DeserializeObject(m.ItemJson, typeof(ItemData), JsonHelper.read_settings);
+                var item = World.world.items.loadObject(itemData);
+                if (item != null) a.equipment.setItem(item, a);
+            }
+            catch (Exception e) { ModLog.Warn("ApplyEquip failed: " + e.Message); }
+            finally { _applyingEquip = false; }
+        }
+
+        private void ApplyObject(ObjectMsg m)
+        {
+            _applyingObject = true;
+            try
+            {
+                foreach (var r in _objReg)
+                    if (r.Kind == m.Kind)
+                    {
+                        var data = JsonConvert.DeserializeObject(m.Json, r.DataType, JsonHelper.read_settings);
+                        var mgr = r.Mgr();
+                        if (mgr == null) return;
+                        var load = AccessTools.Method(mgr.GetType(), "loadObject", new[] { r.DataType });
+                        load?.Invoke(mgr, new[] { data });
+                        return;
+                    }
+            }
+            catch (Exception e) { ModLog.Warn($"ApplyObject(kind={m.Kind}) failed: " + e.Message); }
+            finally { _applyingObject = false; }
         }
 
         private void ApplyTime(TimeMsg m)

@@ -52,12 +52,12 @@ namespace WorldboxMP.Client.UI
 
                 // Logs — needs to be in a room.
                 AddButton("wbmp_logs", "Server logs",
-                    IconFactory.Get("wbmp_logs", new Color(0.85f, 0.70f, 0.30f)),
+                    IconFactory.GetEmbedded("logs-icon.png") ?? IconFactory.Get("wbmp_logs", new Color(0.85f, 0.70f, 0.30f)),
                     tab, InRoom, () => { Net?.RequestLogs(); MultiplayerWindow.Open(); });
 
                 // Settings — always available.
                 AddButton("wbmp_settings", "Server settings",
-                    IconFactory.Get("wbmp_settings", new Color(0.55f, 0.55f, 0.60f)),
+                    IconFactory.GetEmbedded("settings-icon.png") ?? IconFactory.Get("wbmp_settings", new Color(0.55f, 0.55f, 0.60f)),
                     tab, AlwaysOn, MultiplayerWindow.OpenSettings);
 
                 Subscribe();

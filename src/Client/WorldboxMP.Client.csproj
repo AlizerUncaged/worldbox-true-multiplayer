@@ -88,6 +88,12 @@
     <EmbeddedResource Include="Resources\title-banner.png">
       <LogicalName>title-banner.png</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Resources\logs-icon.png">
+      <LogicalName>logs-icon.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\settings-icon.png">
+      <LogicalName>settings-icon.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

@@ -28,6 +28,10 @@ namespace WorldboxMP.Shared.Protocol
     public struct WorldLawMsg { public string Id; public bool Value; }
     public struct TimeMsg { public double WorldTime; }
     public struct RenameMsg { public long Id; public string Name; }
+    public struct HealthMsg { public long Id; public int Health; }
+    public struct StatusMsg { public long Id; public string StatusId; public float Timer; public bool Add; }
+    public struct EquipMsg { public long ActorId; public string ItemJson; }
+    public struct ObjectMsg { public byte Kind; public string Json; }
 
     /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
@@ -100,6 +104,42 @@ namespace WorldboxMP.Shared.Protocol
             for (int i = 0; i < n; i++)
                 list.Add(new MoveMsg { KingId = r.GetLong(), X = r.GetInt(), Y = r.GetInt() });
             return list;
+        }
+
+        public static byte[] Write(HealthMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.Id); w.Put(m.Health); return w.CopyData();
+        }
+        public static HealthMsg ReadHealth(byte[] data)
+        {
+            var r = new NetDataReader(data); return new HealthMsg { Id = r.GetLong(), Health = r.GetInt() };
+        }
+
+        public static byte[] Write(StatusMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.Id); w.Put(m.StatusId ?? ""); w.Put(m.Timer); w.Put(m.Add); return w.CopyData();
+        }
+        public static StatusMsg ReadStatus(byte[] data)
+        {
+            var r = new NetDataReader(data); return new StatusMsg { Id = r.GetLong(), StatusId = r.GetString(), Timer = r.GetFloat(), Add = r.GetBool() };
+        }
+
+        public static byte[] Write(EquipMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.ActorId); w.Put(m.ItemJson ?? ""); return w.CopyData();
+        }
+        public static EquipMsg ReadEquip(byte[] data)
+        {
+            var r = new NetDataReader(data); return new EquipMsg { ActorId = r.GetLong(), ItemJson = r.GetString() };
+        }
+
+        public static byte[] Write(ObjectMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.Kind); w.Put(m.Json ?? ""); return w.CopyData();
+        }
+        public static ObjectMsg ReadObject(byte[] data)
+        {
+            var r = new NetDataReader(data); return new ObjectMsg { Kind = r.GetByte(), Json = r.GetString() };
         }
 
         public static byte[] Write(TimeMsg m)
