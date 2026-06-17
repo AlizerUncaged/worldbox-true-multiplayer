@@ -31,6 +31,7 @@ namespace WorldboxMP.Client.Dev
 
             int n = InstanceIndex();
             _user = "testp" + n;
+            DevConsole.SetTitle(_user);
             ModLog.Info($"[dev] .dev detected — auto-login as {_user} (instance #{n}).");
 
             var net = NetClient.Instance;

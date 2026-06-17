@@ -18,6 +18,9 @@ namespace WorldboxMP.Client
 
         protected override void OnModLoad()
         {
+#if DEBUG
+            Dev.DevConsole.Start();
+#endif
             ModLog.Info($"Loading WorldBox Multiplayer v{GetDeclaration().Version}...");
 
             // The mod's folder on disk (used to find optional icon PNGs). NML loads

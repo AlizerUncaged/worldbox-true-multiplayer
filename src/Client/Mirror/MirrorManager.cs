@@ -111,8 +111,9 @@ namespace WorldboxMP.Client.Mirror
                 }
                 string actorJson = JsonConvert.SerializeObject(actor.data, JsonHelper.read_settings);
                 Send(MirrorKind.SpawnUnit, MirrorCodec.Write(new SpawnMsg { SubId = subId, SubspeciesJson = subJson, ActorJson = actorJson }));
+                ModLog.Info($"[KING] broadcast spawn id={actor.id} asset={actor.data.asset_id} sub={subId} actor={actorJson.Length}B sub={subJson.Length}B");
             }
-            catch (Exception e) { ModLog.Warn("OnKingSpawned serialize failed: " + e.Message); }
+            catch (Exception e) { ModLog.Error("OnKingSpawned serialize failed: " + e); }
         }
 
         public void OnKingTerraform(WorldTile tile, TileType main, TopTileType top)
@@ -215,17 +216,18 @@ namespace WorldboxMP.Client.Mirror
                 }
                 // 2) Rebuild the exact actor from its data (same id, stats, traits, equipment…).
                 var actorData = JsonConvert.DeserializeObject<ActorData>(m.ActorJson, JsonHelper.read_settings);
-                if (actorData != null)
+                if (actorData == null) { ModLog.Warn("[FOLLOWER] spawn: actorData deserialized null"); return; }
+                var tile = World.world?.GetTile(actorData.x, actorData.y);
+                var a = World.world.units.loadObject(actorData);
+                if (a != null)
                 {
-                    var a = World.world.units.loadObject(actorData);
-                    if (a != null)
-                    {
-                        _kingToLocal[actorData.id] = a;
-                        try { _checkSprite?.Invoke(a, null); } catch { }
-                    }
+                    _kingToLocal[actorData.id] = a;
+                    try { _checkSprite?.Invoke(a, null); } catch { }
+                    ModLog.Info($"[FOLLOWER] spawned id={actorData.id} asset={actorData.asset_id} at ({actorData.x},{actorData.y}) tileOk={tile != null}");
                 }
+                else ModLog.Warn($"[FOLLOWER] loadObject returned null id={actorData.id} asset={actorData.asset_id} at ({actorData.x},{actorData.y}) tileOk={tile != null}");
             }
-            catch (Exception e) { ModLog.Warn("ApplySpawn failed: " + e.Message); }
+            catch (Exception e) { ModLog.Error("ApplySpawn failed: " + e); }
             finally { ApplyingSpawn = false; }
         }
 

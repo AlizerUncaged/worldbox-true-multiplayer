@@ -31,6 +31,7 @@ namespace WorldboxMP.Client.UI
         private Canvas _canvas;
         private static Sprite _fingerSprite;
         private float _sendTimer;
+        private float _dbgTimer;
         private const float SendInterval = 0.05f;   // 20 Hz
 
         public static void Spawn()
@@ -78,8 +79,16 @@ namespace WorldboxMP.Client.UI
             _sendTimer += Time.unscaledDeltaTime;
             if (_sendTimer < SendInterval) return;
             _sendTimer = 0f;
-            Vector3 world = cam.ScreenToWorldPoint(Input.mousePosition);
+            var mp = Input.mousePosition; mp.z = -cam.transform.position.z;  // depth to the world plane
+            Vector3 world = cam.ScreenToWorldPoint(mp);
             net.SendCursor(world.x, world.y, Input.GetMouseButton(0));
+
+            _dbgTimer += SendInterval;
+            if (_dbgTimer >= 3f)
+            {
+                _dbgTimer = 0f;
+                ModLog.Info($"[cursor] me={net.Username} send world=({world.x:F1},{world.y:F1}) remoteCursors={_cursors.Count} camOrtho={cam.orthographic}");
+            }
         }
 
         private void OnRemoteCursor(CursorUpdate c)
@@ -89,6 +98,7 @@ namespace WorldboxMP.Client.UI
             {
                 v = CreateVisual(c.Id4);
                 _cursors[c.Id4] = v;
+                ModLog.Info($"[cursor] first from {NameOf(c.Id4)} ({c.Id4}) world=({c.X:F1},{c.Y:F1})");
             }
             v.WorldTarget = new Vector2(c.X, c.Y);
             if (!v.HasPos) { v.WorldPos = v.WorldTarget; v.HasPos = true; }
