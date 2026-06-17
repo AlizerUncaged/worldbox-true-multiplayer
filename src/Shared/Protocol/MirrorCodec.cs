@@ -32,6 +32,11 @@ namespace WorldboxMP.Shared.Protocol
     public struct StatusMsg { public long Id; public string StatusId; public float Timer; public bool Add; }
     public struct EquipMsg { public long ActorId; public string ItemJson; }
     public struct ObjectMsg { public byte Kind; public string Json; }
+    public struct ObjectRemoveMsg { public byte Kind; public long Id; }
+    public struct MemberMsg { public long ActorId; public byte Kind; public long TargetId; }
+    public struct CaptureMsg { public long CityId; public long KingdomId; public bool Captured; public bool Rebellion; }
+    public struct KingdomPropMsg { public long KingdomId; public byte Prop; public long Value; }
+    public struct WarEndMsg { public long WarId; public byte Winner; }
 
     /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
@@ -104,6 +109,51 @@ namespace WorldboxMP.Shared.Protocol
             for (int i = 0; i < n; i++)
                 list.Add(new MoveMsg { KingId = r.GetLong(), X = r.GetInt(), Y = r.GetInt() });
             return list;
+        }
+
+        public static byte[] Write(ObjectRemoveMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.Kind); w.Put(m.Id); return w.CopyData();
+        }
+        public static ObjectRemoveMsg ReadObjectRemove(byte[] data)
+        {
+            var r = new NetDataReader(data); return new ObjectRemoveMsg { Kind = r.GetByte(), Id = r.GetLong() };
+        }
+
+        public static byte[] Write(MemberMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.ActorId); w.Put(m.Kind); w.Put(m.TargetId); return w.CopyData();
+        }
+        public static MemberMsg ReadMember(byte[] data)
+        {
+            var r = new NetDataReader(data); return new MemberMsg { ActorId = r.GetLong(), Kind = r.GetByte(), TargetId = r.GetLong() };
+        }
+
+        public static byte[] Write(CaptureMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.CityId); w.Put(m.KingdomId); w.Put(m.Captured); w.Put(m.Rebellion); return w.CopyData();
+        }
+        public static CaptureMsg ReadCapture(byte[] data)
+        {
+            var r = new NetDataReader(data); return new CaptureMsg { CityId = r.GetLong(), KingdomId = r.GetLong(), Captured = r.GetBool(), Rebellion = r.GetBool() };
+        }
+
+        public static byte[] Write(KingdomPropMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.KingdomId); w.Put(m.Prop); w.Put(m.Value); return w.CopyData();
+        }
+        public static KingdomPropMsg ReadKingdomProp(byte[] data)
+        {
+            var r = new NetDataReader(data); return new KingdomPropMsg { KingdomId = r.GetLong(), Prop = r.GetByte(), Value = r.GetLong() };
+        }
+
+        public static byte[] Write(WarEndMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.WarId); w.Put(m.Winner); return w.CopyData();
+        }
+        public static WarEndMsg ReadWarEnd(byte[] data)
+        {
+            var r = new NetDataReader(data); return new WarEndMsg { WarId = r.GetLong(), Winner = r.GetByte() };
         }
 
         public static byte[] Write(HealthMsg m)

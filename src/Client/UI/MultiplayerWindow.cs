@@ -72,7 +72,8 @@ namespace WorldboxMP.Client.UI
             lg.childControlWidth = true; lg.childForceExpandWidth = true;
             lg.childControlHeight = true; lg.childForceExpandHeight = false;
             lg.childAlignment = TextAnchor.UpperCenter;
-            lg.spacing = 8; lg.padding = new RectOffset(12, 12, 10, 12);
+            // Inset from the decorative frame border (left a touch more) + leave room for the right scrollbar.
+            lg.spacing = 8; lg.padding = new RectOffset(18, 22, 10, 12);
 
             // Title banner.
             var banner = IconFactory.GetEmbedded("title-banner.png", padToSquare: false);
@@ -103,6 +104,9 @@ namespace WorldboxMP.Client.UI
             UiKit.MakeText("h", _loginPanel.transform, "Account", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _userField = UiKit.MakeInput("User", _loginPanel.transform, "Username", false, 24);
             _passField = UiKit.MakeInput("Pass", _loginPanel.transform, "Password", true, 64);
+#if DEBUG
+            if (!string.IsNullOrEmpty(Dev.DevAutoLogin.User)) { _userField.text = Dev.DevAutoLogin.User; _passField.text = Dev.DevAutoLogin.User; }
+#endif
             var row = UiKit.MakeRow("Buttons", _loginPanel.transform);
             UiKit.MakeButton("LoginBtn", row.transform, "Login",
                 () => Net.Login(_userField.text, _passField.text), UiKit.ButtonRed);

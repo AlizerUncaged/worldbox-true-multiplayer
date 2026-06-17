@@ -85,5 +85,41 @@ namespace WorldboxMP.Shared.Protocol
         /// rebuild it via the matching manager.loadObject.
         /// </summary>
         Object = 15,
+
+        /// <summary>A structural object was destroyed (manager.removeObject) — kind + id.</summary>
+        ObjectRemove = 16,
+
+        /// <summary>An actor joined a kingdom/religion/culture/language/city.</summary>
+        Member = 17,
+
+        /// <summary>A city changed owner (City.joinAnotherKingdom) — capture/rebellion.</summary>
+        Capture = 18,
+
+        /// <summary>A kingdom property changed (king / capital / color).</summary>
+        KingdomProp = 19,
+
+        /// <summary>A war ended (WarManager.endWar) — war id + winner.</summary>
+        WarEnd = 20,
+    }
+}
+
+namespace WorldboxMP.Shared.Protocol
+{
+    /// <summary>Sub-kinds for <see cref="MirrorKind.Member"/> (what an actor joined).</summary>
+    public static class MemberKind
+    {
+        public const byte Kingdom = 1;
+        public const byte Religion = 2;
+        public const byte Culture = 3;
+        public const byte Language = 4;
+        public const byte City = 5;
+    }
+
+    /// <summary>Sub-kinds for <see cref="MirrorKind.KingdomProp"/>.</summary>
+    public static class KingdomPropKind
+    {
+        public const byte King = 1;     // value = actor id
+        public const byte Capital = 2;  // value = city id
+        public const byte Color = 3;    // value = color id
     }
 }

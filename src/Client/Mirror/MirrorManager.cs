@@ -51,7 +51,15 @@ namespace WorldboxMP.Client.Mirror
         // Registry of structural objects synced generically (Data + manager.loadObject).
         private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; }
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
-        private bool _applyingStatus, _applyingEquip, _applyingObject;
+        private bool _applyingStatus, _applyingEquip, _applyingObject, _applyingMember, _applyingCapture, _applyingKProp;
+
+        private static long IdOf(object o)
+        {
+            if (o == null) return 0;
+            try { var p = o.GetType().GetProperty("id"); if (p != null) return Convert.ToInt64(p.GetValue(o)); } catch { }
+            try { var f = AccessTools.Field(o.GetType(), "id"); if (f != null) return Convert.ToInt64(f.GetValue(o)); } catch { }
+            return 0;
+        }
 
         // Movement is event-based: the king's per-tile moveTo commits are collected
         // here and flushed once per frame (no polling/interval).
@@ -241,6 +249,55 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn("OnKingObject failed: " + e.Message); }
         }
 
+        public void OnKingObjectRemove(object obj)
+        {
+            if (!Active || !IsKing || _applyingObject || obj == null) return;
+            foreach (var r in _objReg)
+                if (r.ObjType.IsInstanceOfType(obj))
+                {
+                    Send(MirrorKind.ObjectRemove, MirrorCodec.Write(new ObjectRemoveMsg { Kind = r.Kind, Id = IdOf(obj) }));
+                    return;
+                }
+        }
+
+        public void OnKingMember(Actor a, object target)
+        {
+            if (!Active || !IsKing || _applyingMember || a == null || target == null) return;
+            byte kind = target is Kingdom ? MemberKind.Kingdom
+                      : target is Religion ? MemberKind.Religion
+                      : target is Culture ? MemberKind.Culture
+                      : target is Language ? MemberKind.Language
+                      : target is City ? MemberKind.City : (byte)0;
+            if (kind == 0) return;
+            Send(MirrorKind.Member, MirrorCodec.Write(new MemberMsg { ActorId = a.id, Kind = kind, TargetId = IdOf(target) }));
+        }
+
+        public void OnKingCapture(City city, Kingdom k, bool captured, bool rebellion)
+        {
+            if (!Active || !IsKing || _applyingCapture || city == null) return;
+            Send(MirrorKind.Capture, MirrorCodec.Write(new CaptureMsg
+            { CityId = city.id, KingdomId = k != null ? k.id : 0, Captured = captured, Rebellion = rebellion }));
+        }
+
+        public void OnKingdomProp(Kingdom k, byte prop, object value)
+        {
+            if (!Active || !IsKing || _applyingKProp || k == null) return;
+            Send(MirrorKind.KingdomProp, MirrorCodec.Write(new KingdomPropMsg { KingdomId = k.id, Prop = prop, Value = IdOf(value) }));
+        }
+
+        public void OnKingdomColor(Kingdom k, long colorId)
+        {
+            if (!Active || !IsKing || _applyingKProp || k == null) return;
+            Send(MirrorKind.KingdomProp, MirrorCodec.Write(new KingdomPropMsg { KingdomId = k.id, Prop = KingdomPropKind.Color, Value = colorId }));
+        }
+
+        public void OnKingWarEnd(object war, object winner)
+        {
+            if (!Active || !IsKing || war == null) return;
+            Send(MirrorKind.WarEnd, MirrorCodec.Write(new WarEndMsg
+            { WarId = IdOf(war), Winner = winner != null ? Convert.ToByte(winner) : (byte)0 }));
+        }
+
         public void OnKingYear()
         {
             if (!Active || !IsKing) return;
@@ -303,6 +360,21 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.Object:
                     if (IsFollower) ApplyObject(MirrorCodec.ReadObject(msg.Payload));
+                    break;
+                case MirrorKind.ObjectRemove:
+                    if (IsFollower) ApplyObjectRemove(MirrorCodec.ReadObjectRemove(msg.Payload));
+                    break;
+                case MirrorKind.Member:
+                    if (IsFollower) ApplyMember(MirrorCodec.ReadMember(msg.Payload));
+                    break;
+                case MirrorKind.Capture:
+                    if (IsFollower) ApplyCapture(MirrorCodec.ReadCapture(msg.Payload));
+                    break;
+                case MirrorKind.KingdomProp:
+                    if (IsFollower) ApplyKingdomProp(MirrorCodec.ReadKingdomProp(msg.Payload));
+                    break;
+                case MirrorKind.WarEnd:
+                    if (IsFollower) ApplyWarEnd(MirrorCodec.ReadWarEnd(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -463,6 +535,85 @@ namespace WorldboxMP.Client.Mirror
             }
             catch (Exception e) { ModLog.Warn($"ApplyObject(kind={m.Kind}) failed: " + e.Message); }
             finally { _applyingObject = false; }
+        }
+
+        private void ApplyObjectRemove(ObjectRemoveMsg m)
+        {
+            foreach (var r in _objReg)
+                if (r.Kind == m.Kind)
+                {
+                    try
+                    {
+                        var mgr = r.Mgr(); if (mgr == null) return;
+                        var get = AccessTools.Method(mgr.GetType(), "get", new[] { typeof(long) });
+                        var obj = get?.Invoke(mgr, new object[] { m.Id });
+                        if (obj == null) return;
+                        _applyingObject = true;
+                        var rem = AccessTools.Method(mgr.GetType(), "removeObject", new[] { r.ObjType });
+                        rem?.Invoke(mgr, new[] { obj });
+                    }
+                    catch (Exception e) { ModLog.Warn($"ApplyObjectRemove(kind={m.Kind}) failed: " + e.Message); }
+                    finally { _applyingObject = false; }
+                    return;
+                }
+        }
+
+        private void ApplyMember(MemberMsg m)
+        {
+            var a = Resolve(m.ActorId); if (a == null) return;
+            _applyingMember = true;
+            try
+            {
+                switch (m.Kind)
+                {
+                    case MemberKind.Kingdom: var k = World.world.kingdoms.get(m.TargetId); if (k != null) a.joinKingdom(k); break;
+                    case MemberKind.Religion: var r = World.world.religions.get(m.TargetId); if (r != null) a.setReligion(r); break;
+                    case MemberKind.Culture: var c = World.world.cultures.get(m.TargetId); if (c != null) a.setCulture(c); break;
+                    case MemberKind.Language: var l = World.world.languages.get(m.TargetId); if (l != null) a.joinLanguage(l); break;
+                    case MemberKind.City: var ci = World.world.cities.get(m.TargetId); if (ci != null) a.joinCity(ci); break;
+                }
+            }
+            catch (Exception e) { ModLog.Warn("ApplyMember failed: " + e.Message); }
+            finally { _applyingMember = false; }
+        }
+
+        private void ApplyCapture(CaptureMsg m)
+        {
+            var city = World.world.cities.get(m.CityId);
+            var k = World.world.kingdoms.get(m.KingdomId);
+            if (city == null) return;
+            _applyingCapture = true;
+            try { city.joinAnotherKingdom(k, m.Captured, m.Rebellion); }
+            catch (Exception e) { ModLog.Warn("ApplyCapture failed: " + e.Message); }
+            finally { _applyingCapture = false; }
+        }
+
+        private void ApplyKingdomProp(KingdomPropMsg m)
+        {
+            var k = World.world.kingdoms.get(m.KingdomId);
+            if (k == null) return;
+            _applyingKProp = true;
+            try
+            {
+                switch (m.Prop)
+                {
+                    case KingdomPropKind.King: var a = World.world.units.get(m.Value); if (a != null) k.setKing(a, false); break;
+                    case KingdomPropKind.Capital: var c = World.world.cities.get(m.Value); if (c != null) k.setCapital(c); break;
+                    // Color isn't a granular setter on Kingdom; it arrives via KingdomData on create/resync.
+                }
+            }
+            catch (Exception e) { ModLog.Warn("ApplyKingdomProp failed: " + e.Message); }
+            finally { _applyingKProp = false; }
+        }
+
+        private void ApplyWarEnd(WarEndMsg m)
+        {
+            try
+            {
+                var war = World.world.wars.get(m.WarId);
+                if (war != null) World.world.wars.endWar(war, (WarWinner)m.Winner);
+            }
+            catch (Exception e) { ModLog.Warn("ApplyWarEnd failed: " + e.Message); }
         }
 
         private void ApplyTime(TimeMsg m)

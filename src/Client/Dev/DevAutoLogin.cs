@@ -20,7 +20,9 @@ namespace WorldboxMP.Client.Dev
     {
         private static bool _started;
         private static bool _loginTried;
-        private static string _user;
+
+        /// <summary>The dev account name (testpN), or null when .dev isn't present. Used to prefill the login form.</summary>
+        public static string User { get; private set; }
 
         public static void TryStart()
         {
@@ -30,32 +32,36 @@ namespace WorldboxMP.Client.Dev
             if (!DevFileExists()) { ModLog.Info("[dev] no .dev file — auto-login disabled."); return; }
 
             int n = InstanceIndex();
-            _user = "testp" + n;
-            DevConsole.SetTitle(_user);
-            ModLog.Info($"[dev] .dev detected — auto-login as {_user} (instance #{n}).");
+            User = "testp" + n;
+            DevConsole.SetTitle(User);
+            ModLog.Info($"[dev] .dev detected — auto-login as {User} (instance #{n}).");
 
             var net = NetClient.Instance;
-            net.OnStateChanged += s => { if (s == ConnState.Connected) AttemptLogin(); };
+            net.OnStateChanged += s =>
+            {
+                if (s == ConnState.Disconnected) _loginTried = false;   // re-login on the next (re)connect
+                else if (s == ConnState.Connected) AttemptLogin();
+            };
             net.OnAuth += OnAuth;
             if (net.State == ConnState.Connected) AttemptLogin();
         }
 
         private static void AttemptLogin()
         {
-            if (_loginTried || NetClient.Instance.LoggedIn) return;
+            if (_loginTried || NetClient.Instance.LoggedIn || string.IsNullOrEmpty(User)) return;
             _loginTried = true;
-            NetClient.Instance.Login(_user, _user);
+            NetClient.Instance.Login(User, User);
         }
 
         private static void OnAuth(AuthResponse r)
         {
-            if (r.Ok) { ModLog.Info($"[dev] logged in as {_user}."); return; }
+            if (r.Ok) { ModLog.Info($"[dev] logged in as {User}."); return; }
             // Login failed (likely the account doesn't exist yet) → register it once.
             if (_loginTried)
             {
                 _loginTried = false; // so a subsequent register-failure won't loop into login
-                ModLog.Info($"[dev] {_user} not found, registering...");
-                NetClient.Instance.Register(_user, _user);
+                ModLog.Info($"[dev] {User} not found, registering...");
+                NetClient.Instance.Register(User, User);
             }
         }
 

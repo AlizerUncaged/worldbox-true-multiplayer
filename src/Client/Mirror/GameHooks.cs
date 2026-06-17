@@ -3,6 +3,7 @@ using System.Collections;
 using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
+using WorldboxMP.Shared.Protocol;   // MemberKind, KingdomPropKind
 
 namespace WorldboxMP.Client.Mirror
 {
@@ -92,6 +93,40 @@ namespace WorldboxMP.Client.Mirror
                 PatchCreate(harmony, typeof(LanguageManager), "newLanguage", typeof(Language));
                 PatchCreate(harmony, typeof(BuildingManager), "addBuilding", typeof(Building));
 
+                // Structural object destruction (removeObject) — one postfix for all.
+                PatchRemove(harmony, typeof(KingdomManager), typeof(Kingdom));
+                PatchRemove(harmony, typeof(CityManager), typeof(City));
+                PatchRemove(harmony, typeof(WarManager), typeof(War));
+                PatchRemove(harmony, typeof(AllianceManager), typeof(Alliance));
+                PatchRemove(harmony, typeof(PlotManager), typeof(Plot));
+                PatchRemove(harmony, typeof(ReligionManager), typeof(Religion));
+                PatchRemove(harmony, typeof(CultureManager), typeof(Culture));
+                PatchRemove(harmony, typeof(LanguageManager), typeof(Language));
+                PatchRemove(harmony, typeof(BuildingManager), typeof(Building));
+
+                // Actor membership/conversion (kingdom/religion/culture/language/city).
+                PatchMember(harmony, "joinKingdom", typeof(Kingdom));
+                PatchMember(harmony, "setReligion", typeof(Religion));
+                PatchMember(harmony, "setCulture", typeof(Culture));
+                PatchMember(harmony, "joinLanguage", typeof(Language));
+                PatchMember(harmony, "joinCity", typeof(City));
+
+                // City ownership change (capture / rebellion).
+                var capture = AccessTools.Method(typeof(City), "joinAnotherKingdom", new[] { typeof(Kingdom), typeof(bool), typeof(bool) });
+                if (capture != null) harmony.Patch(capture, postfix: H(nameof(Capture_Postfix)));
+
+                // Kingdom properties.
+                var setKing = AccessTools.Method(typeof(Kingdom), "setKing", new[] { typeof(Actor), typeof(bool) });
+                if (setKing != null) harmony.Patch(setKing, postfix: H(nameof(SetKing_Postfix)));
+                var setCapital = AccessTools.Method(typeof(Kingdom), "setCapital", new[] { typeof(City) });
+                if (setCapital != null) harmony.Patch(setCapital, postfix: H(nameof(SetCapital_Postfix)));
+                var setColor = AccessTools.Method(typeof(Kingdom), "setColorID", new[] { typeof(int) });
+                if (setColor != null) harmony.Patch(setColor, postfix: H(nameof(SetColor_Postfix)));
+
+                // War end.
+                var endWar = AccessTools.Method(typeof(WarManager), "endWar");
+                if (endWar != null) harmony.Patch(endWar, postfix: H(nameof(EndWar_Postfix)));
+
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
@@ -123,6 +158,26 @@ namespace WorldboxMP.Client.Mirror
                 else ModLog.Warn($"PatchCreate: no {managerType.Name}.{method} returning {objType.Name}");
             }
             catch (Exception e) { ModLog.Warn($"PatchCreate {managerType.Name}.{method} failed: " + e.Message); }
+        }
+
+        private static void PatchRemove(Harmony harmony, Type managerType, Type objType)
+        {
+            try
+            {
+                var mi = AccessTools.Method(managerType, "removeObject", new[] { objType });
+                if (mi != null) harmony.Patch(mi, postfix: H(nameof(StructuralRemove_Postfix)));
+            }
+            catch (Exception e) { ModLog.Warn($"PatchRemove {managerType.Name} failed: " + e.Message); }
+        }
+
+        private static void PatchMember(Harmony harmony, string method, Type targetType)
+        {
+            try
+            {
+                var mi = AccessTools.Method(typeof(Actor), method, new[] { targetType });
+                if (mi != null) harmony.Patch(mi, postfix: H(nameof(Member_Postfix)));
+            }
+            catch (Exception e) { ModLog.Warn($"PatchMember {method} failed: " + e.Message); }
         }
 
         private static FieldInfo _preloadOps;
@@ -196,6 +251,42 @@ namespace WorldboxMP.Client.Mirror
         private static void StructuralCreate_Postfix(object __result)
         {
             MirrorManager.Instance?.OnKingObject(__result);
+        }
+
+        private static void StructuralRemove_Postfix(object[] __args)
+        {
+            if (__args != null && __args.Length > 0) MirrorManager.Instance?.OnKingObjectRemove(__args[0]);
+        }
+
+        private static void Member_Postfix(Actor __instance, object[] __args)
+        {
+            if (__args != null && __args.Length > 0) MirrorManager.Instance?.OnKingMember(__instance, __args[0]);
+        }
+
+        private static void Capture_Postfix(City __instance, object[] __args)
+        {
+            if (__args == null || __args.Length < 3) return;
+            MirrorManager.Instance?.OnKingCapture(__instance, __args[0] as Kingdom, (bool)__args[1], (bool)__args[2]);
+        }
+
+        private static void SetKing_Postfix(Kingdom __instance, object[] __args)
+        {
+            if (__args != null && __args.Length > 0) MirrorManager.Instance?.OnKingdomProp(__instance, KingdomPropKind.King, __args[0]);
+        }
+
+        private static void SetCapital_Postfix(Kingdom __instance, object[] __args)
+        {
+            if (__args != null && __args.Length > 0) MirrorManager.Instance?.OnKingdomProp(__instance, KingdomPropKind.Capital, __args[0]);
+        }
+
+        private static void SetColor_Postfix(Kingdom __instance, object[] __args)
+        {
+            if (__args != null && __args.Length > 0) MirrorManager.Instance?.OnKingdomColor(__instance, System.Convert.ToInt64(__args[0]));
+        }
+
+        private static void EndWar_Postfix(object[] __args)
+        {
+            if (__args != null && __args.Length > 0) MirrorManager.Instance?.OnKingWarEnd(__args[0], __args.Length > 1 ? __args[1] : null);
         }
 
         private static void AddTrait_Postfix(Actor __instance, string pTraitID)
