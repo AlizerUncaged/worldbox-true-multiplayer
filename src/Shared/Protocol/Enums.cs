@@ -50,5 +50,8 @@ namespace WorldboxMP.Shared.Protocol
 
         /// <summary>A tile caught fire / was extinguished (WorldBehaviourActionFire).</summary>
         Fire = 6,
+
+        /// <summary>A unit gained/lost a trait (Actor.addTrait/removeTrait).</summary>
+        Trait = 7,
     }
 }

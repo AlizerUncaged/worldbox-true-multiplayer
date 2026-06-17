@@ -14,7 +14,7 @@ namespace WorldboxMP.Client.UI
     /// </summary>
     public class PlayerCursors : MonoBehaviour
     {
-        private class Visual { public GameObject Root; public SpriteRenderer Finger; public Text Label; }
+        private class Visual { public GameObject Root; public SpriteRenderer Finger; public Text Label; public Vector3 Target; }
 
         private readonly Dictionary<string, Visual> _cursors = new Dictionary<string, Visual>();
         private static Sprite _fingerSprite;
@@ -39,6 +39,12 @@ namespace WorldboxMP.Client.UI
 
         private void Update()
         {
+            // Smoothly glide every remote cursor toward its latest target each frame.
+            float t = 1f - Mathf.Exp(-Time.unscaledDeltaTime * 14f);
+            foreach (var v in _cursors.Values)
+                if (v.Root != null)
+                    v.Root.transform.position = Vector3.Lerp(v.Root.transform.position, v.Target, t);
+
             var net = NetClient.Instance;
             if (net == null || !net.InRoom || net.State != ConnState.Connected) return;
             var cam = Camera.main;
@@ -55,13 +61,15 @@ namespace WorldboxMP.Client.UI
         private void OnRemoteCursor(CursorUpdate c)
         {
             if (c.Id4 == NetClient.Instance.Id4) return;   // never draw our own
-            if (!_cursors.TryGetValue(c.Id4, out var v))
+            bool isNew = !_cursors.TryGetValue(c.Id4, out var v);
+            if (isNew)
             {
                 v = CreateVisual(c.Id4);
                 _cursors[c.Id4] = v;
             }
-            // Place the finger so its tip sits roughly at the cursor point.
-            v.Root.transform.position = new Vector3(c.X, c.Y, -10f);
+            // Update the interpolation target; Update() glides the finger toward it.
+            v.Target = new Vector3(c.X, c.Y, -10f);
+            if (isNew) v.Root.transform.position = v.Target;   // no glide-from-origin on first sight
             if (v.Finger != null) v.Finger.transform.localScale = Vector3.one * (c.Pressed ? 0.42f : 0.5f);
         }
 

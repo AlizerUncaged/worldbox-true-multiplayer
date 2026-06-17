@@ -250,6 +250,11 @@ namespace WorldboxMP.Server.Net
                     LogC($"[{room}] {s.Username} fire {(fm.On ? "+" : "-")} ({fm.X},{fm.Y})",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("fire")} {Val(fm.On ? "+" : "-")} {Dim($"({fm.X},{fm.Y})")}");
                     break;
+                case MirrorKind.Trait:
+                    var tt = MirrorCodec.ReadTrait(msg.Payload);
+                    LogC($"[{room}] {s.Username} trait {(tt.Add ? "+" : "-")}{tt.TraitId} #{tt.KingId}",
+                         $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("trait")} {Val((tt.Add ? "+" : "-") + tt.TraitId)} {Dim("#" + tt.KingId)}");
+                    break;
                 case MirrorKind.SimControl:
                     var sc = MirrorCodec.ReadSimControl(msg.Payload);
                     LogC($"[{room}] {s.Username} sim paused={sc.Paused} speed={sc.SpeedId}",

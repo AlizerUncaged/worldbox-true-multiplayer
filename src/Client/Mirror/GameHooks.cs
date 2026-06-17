@@ -27,9 +27,16 @@ namespace WorldboxMP.Client.Mirror
                 if (clickedFinal != null)
                     harmony.Patch(clickedFinal, prefix: H(nameof(ClickedFinal_Prefix)));
 
-                var spawn = AccessTools.Method(typeof(ActorManager), "spawnNewUnit");
+                // createNewUnit is the core spawn funnel — catches player spawns AND
+                // births/reproduction/mutations (which all route through it).
+                var spawn = AccessTools.Method(typeof(ActorManager), "createNewUnit");
                 if (spawn != null)
-                    harmony.Patch(spawn, postfix: H(nameof(SpawnNewUnit_Postfix)));
+                    harmony.Patch(spawn, postfix: H(nameof(CreateNewUnit_Postfix)));
+
+                var addTrait = AccessTools.Method(typeof(Actor), "addTrait", new[] { typeof(string), typeof(bool) });
+                if (addTrait != null) harmony.Patch(addTrait, postfix: H(nameof(AddTrait_Postfix)));
+                var removeTrait = AccessTools.Method(typeof(Actor), "removeTrait", new[] { typeof(string) });
+                if (removeTrait != null) harmony.Patch(removeTrait, postfix: H(nameof(RemoveTrait_Postfix)));
 
                 var terraform = AccessTools.Method(typeof(MapAction), "terraformTile");
                 if (terraform != null)
@@ -61,9 +68,19 @@ namespace WorldboxMP.Client.Mirror
             return m.OnLocalGodPower(pPos, pPower);
         }
 
-        private static void SpawnNewUnit_Postfix(Actor __result, string pActorAssetID)
+        private static void CreateNewUnit_Postfix(Actor __result, string pStatsID)
         {
-            MirrorManager.Instance?.OnKingSpawned(__result, pActorAssetID);
+            MirrorManager.Instance?.OnKingSpawned(__result, pStatsID);
+        }
+
+        private static void AddTrait_Postfix(Actor __instance, string pTraitID)
+        {
+            MirrorManager.Instance?.OnKingTrait(__instance, pTraitID, true);
+        }
+
+        private static void RemoveTrait_Postfix(Actor __instance, string pTraitID)
+        {
+            MirrorManager.Instance?.OnKingTrait(__instance, pTraitID, false);
         }
 
         private static void Terraform_Postfix(WorldTile pTile, TileType pNewTypeMain, TopTileType pTopType)

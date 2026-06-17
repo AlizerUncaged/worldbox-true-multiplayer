@@ -39,10 +39,11 @@ namespace WorldboxMP.Client.Mirror
         private float _streamTimer;
         private const float StreamInterval = 0.066f;   // ~15 Hz position stream
         private float _snapshotTimer;
-        // Periodic full resync interval (seconds). Long by default — each resync is a
-        // full world reload (a brief hitch). Use the in-game "Resync" button for an
-        // immediate one. Set <= 0 to disable periodic resync.
-        public float PeriodicSnapshotSeconds = 25f;
+        // Periodic full resync is DISABLED (0): each snapshot is a full world reload,
+        // which is far too disruptive to run on a timer. The world is sent once on
+        // join, and otherwise only when a player explicitly presses "Resync". All
+        // ongoing sync is granular (spawns, births, deaths, terrain, fire, traits, …).
+        public float PeriodicSnapshotSeconds = 0f;
         private bool _lastPaused;
 
         public static void Init(Harmony harmony)
@@ -112,6 +113,12 @@ namespace WorldboxMP.Client.Mirror
             Send(MirrorKind.Fire, MirrorCodec.Write(new FireMsg { X = tile.pos.x, Y = tile.pos.y, On = on }));
         }
 
+        public void OnKingTrait(Actor actor, string traitId, bool add)
+        {
+            if (!Active || !IsKing || actor == null || string.IsNullOrEmpty(traitId)) return;
+            Send(MirrorKind.Trait, MirrorCodec.Write(new TraitMsg { KingId = actor.id, TraitId = traitId, Add = add }));
+        }
+
         // ── Incoming ────────────────────────────────────────────────────────
         private void OnMirror(MirrorMessage msg)
         {
@@ -136,6 +143,9 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.Fire:
                     if (IsFollower) ApplyFire(MirrorCodec.ReadFire(msg.Payload));
+                    break;
+                case MirrorKind.Trait:
+                    if (IsFollower) ApplyTrait(MirrorCodec.ReadTrait(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -221,6 +231,14 @@ namespace WorldboxMP.Client.Mirror
                 else WorldBehaviourActionFire.removeFire(tile);
             }
             catch (Exception e) { ModLog.Warn("ApplyFire failed: " + e.Message); }
+        }
+
+        private void ApplyTrait(TraitMsg m)
+        {
+            var a = Resolve(m.KingId);
+            if (a == null) return;
+            try { if (m.Add) a.addTrait(m.TraitId, false); else a.removeTrait(m.TraitId); }
+            catch (Exception e) { ModLog.Warn("ApplyTrait failed: " + e.Message); }
         }
 
         private void ApplySimControl(SimControlMsg m)
