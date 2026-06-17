@@ -114,6 +114,11 @@ namespace WorldboxMP.Shared.Protocol
         ShortPoll = 23,
         LongPoll = 24,
         ExtraLongPoll = 25,
+
+        /// <summary>Full per-actor state resync (king → followers): serialized ActorData so
+        /// the follower force-overrides traits/vitals (then recomputes derived stats). Sent
+        /// on the extra_long_poll tier to correct drift the granular events miss.</summary>
+        ActorResync = 26,
     }
 }
 

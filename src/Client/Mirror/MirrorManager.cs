@@ -401,6 +401,9 @@ namespace WorldboxMP.Client.Mirror
                 case MirrorKind.ExtraLongPoll:
                     if (IsFollower) { var sb = MirrorCodec.ReadScalarBatch(msg.Payload, out var pk); ApplyPoll(sb, pk); }
                     break;
+                case MirrorKind.ActorResync:
+                    if (IsFollower) ApplyActorResync(MirrorCodec.ReadActorResync(msg.Payload));
+                    break;
                 case MirrorKind.Rename:
                     if (IsFollower) ApplyRename(MirrorCodec.ReadRename(msg.Payload));
                     break;
@@ -772,6 +775,37 @@ namespace WorldboxMP.Client.Mirror
             }
         }
 
+        private int _resyncErr;
+        // Follower: force-override each actor's traits + vitals from the king's ActorData,
+        // then recompute derived stats. Fixes drifted traits/statuses (health 1/1, low damage,
+        // wrong speed) that granular events missed. We re-apply traits + vitals only (kingdom/
+        // city/equipment sync via their own events); we do NOT call the full loadFromSave.
+        private void ApplyActorResync(List<ActorStateMsg> list)
+        {
+            if (list == null) return;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var m = list[i];
+                var a = Resolve(m.Id);
+                if (a == null || !a.isAlive()) continue;
+                try
+                {
+                    var data = JsonConvert.DeserializeObject<ActorData>(m.Json, JsonHelper.read_settings);
+                    if (data == null) continue;
+                    a.setData(data);
+                    try { TraitTools.loadTraits(a, data.saved_traits); } catch { }   // force trait list to match king
+                    // current vitals (noclamp on health so it isn't capped by stale max before recompute)
+                    try { a.setHealth(data.health, false); } catch { }
+                    try { a.setNutrition(data.nutrition, false); } catch { }
+                    try { a.setStamina(data.stamina, false); } catch { }
+                    try { a.setMana(data.mana, false); } catch { }
+                    try { a.setHappiness(data.happiness, false); } catch { }
+                    MarkStatsDirty(a);   // recompute max health / speed / damage from the now-correct traits
+                }
+                catch (Exception e) { if (_resyncErr < 5) { _resyncErr++; ModLog.Warn("ApplyActorResync: " + e.Message); } }
+            }
+        }
+
         private void ApplySimControl(SimControlMsg m)
         {
             try
@@ -832,7 +866,32 @@ namespace WorldboxMP.Client.Mirror
             _longPollTimer += dt;
             if (_longPollTimer >= 0.5f) { _longPollTimer = 0f; SendLongPoll(); }
             _extraLongPollTimer += dt;
-            if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; /* reserved: slow-changing state */ }
+            if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; SendActorResync(); }
+        }
+
+        // extra_long_poll (1000ms): force-override each actor's full state on followers, so
+        // traits/statuses/vitals that drifted (or whose events were missed) get corrected and
+        // derived stats (max health, speed, damage) recompute correctly. Heavier than scalars,
+        // so it's on the slowest tier.
+        private void SendActorResync()
+        {
+            try
+            {
+                var units = World.world?.units?.getSimpleList();
+                if (units == null) return;
+                var list = new List<ActorStateMsg>(units.Count);
+                for (int i = 0; i < units.Count; i++)
+                {
+                    var a = units[i];
+                    if (a == null || !a.isAlive()) continue;
+                    try { a.prepareForSave(); } catch { }
+                    var data = _actorDataField?.GetValue(a) as ActorData;
+                    if (data == null) continue;
+                    list.Add(new ActorStateMsg { Id = a.id, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) });
+                }
+                if (list.Count > 0) Send(MirrorKind.ActorResync, MirrorCodec.WriteActorResync(list));
+            }
+            catch (Exception e) { ModLog.Warn("SendActorResync failed: " + e.Message); }
         }
 
         // long_poll (500ms): age — derived from world-time + age_overgrowth on the king; we
