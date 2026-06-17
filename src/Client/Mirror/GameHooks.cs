@@ -136,6 +136,13 @@ namespace WorldboxMP.Client.Mirror
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
+                // Followers must NOT derive their own stats (their subspecies genome comes
+                // through incomplete, so updateStats yields stats["health"]≈0 → maxHealth=1,
+                // clamping synced health down). The king is authoritative for stats: it sends
+                // the computed BaseStats and the follower adopts them. Suppress local recompute.
+                var updStats = AccessTools.Method(typeof(Actor), "updateStats");
+                if (updStats != null) harmony.Patch(updStats, prefix: H(nameof(SuppressUpdateStats_Prefix)));
+
                 // Defensive: on followers, the mirrored world can briefly hold a building
                 // with a null current_tile (e.g. created via loadObject before its tile is
                 // linked). BatchBuildings.updateVisibility then NREs every sim tick inside
@@ -402,6 +409,14 @@ namespace WorldboxMP.Client.Mirror
 
         // Suppress autonomous AI decisions on followers (king is authoritative).
         private static bool SuppressAi_Prefix()
+        {
+            var m = MirrorManager.Instance;
+            return m == null || !m.IsFollower;
+        }
+
+        // Skip local stat recompute on followers — stats come authoritatively from the king
+        // (the follower's genome/subspecies is incomplete and would compute maxHealth=1).
+        private static bool SuppressUpdateStats_Prefix()
         {
             var m = MirrorManager.Instance;
             return m == null || !m.IsFollower;

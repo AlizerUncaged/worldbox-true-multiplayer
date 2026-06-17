@@ -53,6 +53,42 @@ namespace WorldboxMP.Client.Mirror
             try { _setStatsDirty?.Invoke(a, null); } catch { }
         }
         private static MethodInfo _checkSprite;
+        private static FieldInfo _statsField;        // Actor.stats (BaseStats)
+        private static FieldInfo _statsDictField;    // BaseStats._stats_dict
+        private static FieldInfo _statValueField;    // BaseStatsContainer.value
+
+        /// <summary>King: read an actor's fully-computed stats into a name→value map.</summary>
+        private System.Collections.Generic.Dictionary<string, float> ReadStats(Actor a)
+        {
+            var d = new System.Collections.Generic.Dictionary<string, float>();
+            try
+            {
+                var stats = _statsField?.GetValue(a);
+                var dict = stats != null ? _statsDictField?.GetValue(stats) as System.Collections.IDictionary : null;
+                if (dict == null) return d;
+                foreach (System.Collections.DictionaryEntry e in dict)
+                {
+                    var key = e.Key as string;
+                    var v = _statValueField?.GetValue(e.Value);
+                    if (key != null && v != null) d[key] = Convert.ToSingle(v);
+                }
+            }
+            catch { }
+            return d;
+        }
+
+        /// <summary>Follower: overwrite an actor's stats with the king's computed values.</summary>
+        private void ApplyStats(Actor a, System.Collections.Generic.Dictionary<string, float> dict)
+        {
+            if (dict == null || dict.Count == 0) return;
+            try
+            {
+                var stats = _statsField?.GetValue(a) as BaseStats;
+                if (stats == null) return;
+                foreach (var kv in dict) stats[kv.Key] = kv.Value;
+            }
+            catch { }
+        }
         // Actor.data / Subspecies.data are internal at runtime (the publicized DLL
         // lies), so read them via reflection.
         private static FieldInfo _actorDataField;
@@ -114,6 +150,9 @@ namespace WorldboxMP.Client.Mirror
             _mapStatsLoad = AccessTools.Method(typeof(MapStats), "load");
             _itemDataField = AccessTools.Field(typeof(Item), "data");
             _addStatusMethod = AccessTools.Method(typeof(Actor), "addStatusEffect", new[] { typeof(string), typeof(float), typeof(bool) });
+            _statsField = AccessTools.Field(typeof(Actor), "stats");
+            _statsDictField = AccessTools.Field(typeof(BaseStats), "_stats_dict");
+            _statValueField = AccessTools.Field(AccessTools.TypeByName("BaseStatsContainer"), "value");
             BuildObjectRegistry();
             GameHooks.Apply(harmony);
 
@@ -492,7 +531,8 @@ namespace WorldboxMP.Client.Mirror
                 {
                     _kingToLocal[a.id] = a;   // a.id == king's id (loadObject preserves it)
                     try { _checkSprite?.Invoke(a, null); } catch { }
-                    MarkStatsDirty(a);   // recompute speed/combat from synced subspecies+traits
+                    // stats are authoritative from the king (extra_long_poll resync); the
+                    // follower does not recompute (updateStats is suppressed).
                     ModLog.Info($"[FOLLOWER] spawned id={a.id}");
                 }
                 else ModLog.Warn("[FOLLOWER] loadObject returned null (tile/asset missing on this client?)");
@@ -769,7 +809,6 @@ namespace WorldboxMP.Client.Mirror
                             if (delta != 0) data.age_overgrowth += delta;
                         }
                     }
-                    MarkStatsDirty(a);
                 }
                 catch { }
             }
@@ -794,13 +833,14 @@ namespace WorldboxMP.Client.Mirror
                     if (data == null) continue;
                     a.setData(data);
                     try { TraitTools.loadTraits(a, data.saved_traits); } catch { }   // force trait list to match king
-                    // current vitals (noclamp on health so it isn't capped by stale max before recompute)
+                    // Authoritative stats from the king (the follower can't derive them —
+                    // its genome/subspecies is incomplete). Apply BEFORE vitals so maxHealth is right.
+                    try { ApplyStats(a, JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, float>>(m.StatsJson)); } catch { }
                     try { a.setHealth(data.health, false); } catch { }
                     try { a.setNutrition(data.nutrition, false); } catch { }
                     try { a.setStamina(data.stamina, false); } catch { }
                     try { a.setMana(data.mana, false); } catch { }
                     try { a.setHappiness(data.happiness, false); } catch { }
-                    MarkStatsDirty(a);   // recompute max health / speed / damage from the now-correct traits
                 }
                 catch (Exception e) { if (_resyncErr < 5) { _resyncErr++; ModLog.Warn("ApplyActorResync: " + e.Message); } }
             }
@@ -887,7 +927,12 @@ namespace WorldboxMP.Client.Mirror
                     try { a.prepareForSave(); } catch { }
                     var data = _actorDataField?.GetValue(a) as ActorData;
                     if (data == null) continue;
-                    list.Add(new ActorStateMsg { Id = a.id, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) });
+                    list.Add(new ActorStateMsg
+                    {
+                        Id = a.id,
+                        Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings),
+                        StatsJson = JsonConvert.SerializeObject(ReadStats(a))   // king's computed stats
+                    });
                 }
                 if (list.Count > 0) Send(MirrorKind.ActorResync, MirrorCodec.WriteActorResync(list));
             }
@@ -938,12 +983,6 @@ namespace WorldboxMP.Client.Mirror
         {
             WorldSync.Load(snap.Data);
             _kingToLocal.Clear();   // post-load actors carry king ids; new spawns repopulate the map
-            try
-            {
-                var list = World.world?.units?.getSimpleList();
-                if (list != null) for (int i = 0; i < list.Count; i++) MarkStatsDirty(list[i]);
-            }
-            catch (Exception e) { ModLog.Warn("post-snapshot MarkStatsDirty failed: " + e.Message); }
         }
 
         // ── Helpers ─────────────────────────────────────────────────────────
