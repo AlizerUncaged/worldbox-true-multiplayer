@@ -29,12 +29,6 @@ namespace WorldboxMP.Client
             var harmony = new Harmony("alizer.worldboxmp");
             harmony.PatchAll(GetType().Assembly);
 
-            // We reload the world at runtime (join snapshot / resync). WorldBox's
-            // window preloader isn't reentrant and crashes with a duplicate-key
-            // ("achievements") if a reload starts mid-preload. Disable preloading —
-            // windows then instantiate on demand, which is harmless.
-            try { Config.preload_windows = false; } catch { }
-
             // Networking + UI.
             var net = new NetClient();
             MultiplayerWindow.Ensure();

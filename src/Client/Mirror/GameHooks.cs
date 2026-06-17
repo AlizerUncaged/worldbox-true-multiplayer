@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
@@ -57,12 +59,36 @@ namespace WorldboxMP.Client.Mirror
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
+                // Our runtime world reloads (join snapshot / resync) can re-enter the
+                // window preloader and call instantiateWindow twice for the same id,
+                // which throws a duplicate-key ArgumentException and aborts the load.
+                // Guard it: skip the call if that window is already being preloaded.
+                _preloadOps = AccessTools.Field(typeof(WindowPreloader), "_windows_preloading_operations");
+                var instantiate = AccessTools.Method(typeof(WindowPreloader), "instantiateWindow");
+                if (instantiate != null && _preloadOps != null)
+                    harmony.Patch(instantiate, prefix: H(nameof(InstantiateWindow_Prefix)));
+
                 ModLog.Info("Mirror game hooks applied.");
             }
             catch (Exception e) { ModLog.Error("Failed to apply game hooks: " + e); }
         }
 
         private static HarmonyMethod H(string name) => new HarmonyMethod(typeof(GameHooks), name);
+
+        private static FieldInfo _preloadOps;
+
+        // Return false to skip instantiateWindow when this window id is already queued
+        // (prevents the duplicate-key crash on a reload that re-enters the preloader).
+        private static bool InstantiateWindow_Prefix(string pWindowID)
+        {
+            try
+            {
+                if (_preloadOps?.GetValue(null) is IDictionary ops && ops.Contains(pWindowID))
+                    return false;
+            }
+            catch { }
+            return true;
+        }
 
         private static bool ClickedFinal_Prefix(Vector2Int pPos, GodPower pPower)
         {
