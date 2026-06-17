@@ -41,6 +41,16 @@ namespace WorldboxMP.Client.Mirror
         internal static string DbgLastMoveEx = "";
         private static MethodInfo _clickedFinal;
         private static MethodInfo _die;
+        private static MethodInfo _setStatsDirty, _updateStats;
+
+        /// <summary>Force a follower actor to recompute its derived stats (speed, combat,
+        /// genes-driven traits…) from its synced subspecies/traits, so it isn't stuck on
+        /// empty/default stats (which floored movement speed).</summary>
+        private void ForceStats(Actor a)
+        {
+            if (a == null) return;
+            try { _setStatsDirty?.Invoke(a, null); _updateStats?.Invoke(a, null); } catch { }
+        }
         private static MethodInfo _checkSprite;
         // Actor.data / Subspecies.data are internal at runtime (the publicized DLL
         // lies), so read them via reflection.
@@ -93,6 +103,8 @@ namespace WorldboxMP.Client.Mirror
                 new[] { typeof(Vector2Int), typeof(GodPower), typeof(bool) });
             _die = AccessTools.Method(typeof(Actor), "die");
             _checkSprite = AccessTools.Method(typeof(Actor), "checkSpriteToRender");
+            _setStatsDirty = AccessTools.Method(typeof(Actor), "setStatsDirty");
+            _updateStats = AccessTools.Method(typeof(Actor), "updateStats");
             _actorDataField = AccessTools.Field(typeof(Actor), "data");
             _subDataField = AccessTools.Field(typeof(Subspecies), "data");
             _worldLawsField = AccessTools.Field(typeof(MapBox), "world_laws");
@@ -480,6 +492,7 @@ namespace WorldboxMP.Client.Mirror
                 {
                     _kingToLocal[a.id] = a;   // a.id == king's id (loadObject preserves it)
                     try { _checkSprite?.Invoke(a, null); } catch { }
+                    ForceStats(a);   // compute speed/combat/etc. from synced subspecies+traits
                     ModLog.Info($"[FOLLOWER] spawned id={a.id}");
                 }
                 else ModLog.Warn("[FOLLOWER] loadObject returned null (tile/asset missing on this client?)");
@@ -829,6 +842,14 @@ namespace WorldboxMP.Client.Mirror
         {
             WorldSync.Load(snap.Data);
             _kingToLocal.Clear();   // post-load actors carry king ids; new spawns repopulate the map
+            // Recompute derived stats for every loaded actor so movement speed / combat /
+            // gene-driven values aren't stuck at empty defaults on the follower.
+            try
+            {
+                var list = World.world?.units?.getSimpleList();
+                if (list != null) for (int i = 0; i < list.Count; i++) ForceStats(list[i]);
+            }
+            catch (Exception e) { ModLog.Warn("post-snapshot ForceStats failed: " + e.Message); }
         }
 
         // ── Helpers ─────────────────────────────────────────────────────────

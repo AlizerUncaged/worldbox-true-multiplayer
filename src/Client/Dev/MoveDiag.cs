@@ -62,7 +62,19 @@ namespace WorldboxMP.Client.Dev
                         Vector2 pos = a.current_position;
                         float visSpeed = (_lastId == a.id) ? Vector2.Distance(pos, _lastPos) / 2f : -1f; // tiles/sec
                         _lastPos = pos; _lastId = a.id;
-                        actorInfo = $"actors={list.Count} sample id={a.id} cms={cms:F2} visSpeed={visSpeed:F2}t/s moving={a.is_moving} pos=({pos.x:F1},{pos.y:F1})";
+                        // Why is cms low? read stats["speed"], subspecies, asset presence.
+                        float spd = -1f; bool hasSub = false, assetNull = true;
+                        try { hasSub = a.hasSubspecies(); } catch { }
+                        try { var af = AccessTools.Field(typeof(Actor), "asset"); assetNull = af == null || af.GetValue(a) == null; } catch { }
+                        try
+                        {
+                            var sf = AccessTools.Field(typeof(Actor), "stats");
+                            var so = sf?.GetValue(a);
+                            var idx = so?.GetType().GetMethod("get_Item", new[] { typeof(string) });
+                            if (idx != null) spd = (float)idx.Invoke(so, new object[] { "speed" });
+                        }
+                        catch { }
+                        actorInfo = $"actors={list.Count} sample id={a.id} cms={cms:F2} visSpeed={visSpeed:F2}t/s moving={a.is_moving} statsSpeed={spd:F1} hasSub={hasSub} assetNull={assetNull} pos=({pos.x:F1},{pos.y:F1})";
                     }
                 }
 
