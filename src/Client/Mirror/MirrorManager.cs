@@ -101,7 +101,7 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _addStatusMethod; // Actor.addStatusEffect(string,float,bool) is internal
 
         // Registry of structural objects synced generically (Data + manager.loadObject).
-        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; }
+        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; }
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
         private bool _applyingStatus, _applyingEquip, _applyingObject, _applyingMember, _applyingCapture, _applyingKProp;
 
@@ -277,7 +277,11 @@ namespace WorldboxMP.Client.Mirror
                     // in getData()/prepareForSave(); without them a building loads with a null
                     // asset and crashes the follower sim. Call them before serializing, like save does.
                     PrepareForSave = AccessTools.Method(obj, "prepareForSave"),
-                    GetData = AccessTools.Method(obj, "getData") });
+                    GetData = AccessTools.Method(obj, "getData"),
+                    // Cities/kingdoms have NO prepareForSave/getData — they populate their data
+                    // (incl. City.data.zones = territory) in save(). Without this the synced
+                    // CityData has empty zones -> no territory/banner on the follower.
+                    Save = AccessTools.Method(obj, "save") });
             Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
             Reg(2, typeof(City), typeof(CityData), () => World.world.cities);
             Reg(3, typeof(War), typeof(WarData), () => World.world.wars);
@@ -333,6 +337,8 @@ namespace WorldboxMP.Client.Mirror
                         matched = true;
                         // Populate save-derived fields on the live data first (asset_id, etc.).
                         try { r.PrepareForSave?.Invoke(obj, null); } catch (Exception pe) { ModLog.Warn($"[KING] {r.ObjType.Name}.prepareForSave: " + pe.Message); }
+                        // Cities/kingdoms populate their data (incl. zones/territory) in save().
+                        try { r.Save?.Invoke(obj, null); } catch (Exception se) { ModLog.Warn($"[KING] {r.ObjType.Name}.save: " + se.Message); }
                         object data = null;
                         try { data = r.GetData?.Invoke(obj, null); } catch (Exception ge) { ModLog.Warn($"[KING] {r.ObjType.Name}.getData: " + ge.Message); }
                         if (data == null) data = r.DataField?.GetValue(obj);   // fallback to live data field
