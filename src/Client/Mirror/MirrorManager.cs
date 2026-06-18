@@ -53,6 +53,7 @@ namespace WorldboxMP.Client.Mirror
             try { _setStatsDirty?.Invoke(a, null); } catch { }
         }
         private static MethodInfo _checkSprite;
+        private static MethodInfo _cacheTags;
         private static FieldInfo _statsField;        // Actor.stats (BaseStats)
         private static FieldInfo _statsDictField;    // BaseStats._stats_dict
         private static FieldInfo _statValueField;    // BaseStatsContainer.value
@@ -140,6 +141,7 @@ namespace WorldboxMP.Client.Mirror
                 new[] { typeof(Vector2Int), typeof(GodPower), typeof(bool) });
             _die = AccessTools.Method(typeof(Actor), "die");
             _checkSprite = AccessTools.Method(typeof(Actor), "checkSpriteToRender");
+            _cacheTags = AccessTools.Method(typeof(Subspecies), "cacheTags");
             _setStatsDirty = AccessTools.Method(typeof(Actor), "setStatsDirty");
             _updateStats = AccessTools.Method(typeof(Actor), "updateStats");
             _actorDataField = AccessTools.Field(typeof(Actor), "data");
@@ -592,7 +594,15 @@ namespace WorldboxMP.Client.Mirror
                 if (m.SubId != 0 && !string.IsNullOrEmpty(m.SubspeciesJson) && World.world.subspecies.get(m.SubId) == null)
                 {
                     var subData = JsonConvert.DeserializeObject<SubspeciesData>(m.SubspeciesJson, JsonHelper.read_settings);
-                    if (subData != null) World.world.subspecies.loadObject(subData);
+                    if (subData != null)
+                    {
+                        var sub = World.world.subspecies.loadObject(subData);
+                        // Recompute cached meta-tag flags (_is_sapient = hasMetaTag("has_sapience"),
+                        // needs_food, etc.). loadObject doesn't run cacheTags() with traits ready, so
+                        // without this the follower's humans report isSapient()=false -> they're
+                        // counted as Mobs instead of Sapient Population in the world stats.
+                        try { _cacheTags?.Invoke(sub, null); } catch (Exception ce) { ModLog.Warn("[FOLLOWER] subspecies cacheTags: " + ce.Message); }
+                    }
                 }
                 // 2) Rebuild the exact actor from its data (same id, stats, traits, equipment…).
                 //    Pass the data straight to the game's own loader (it reads the data
@@ -962,6 +972,7 @@ namespace WorldboxMP.Client.Mirror
             {
                 Config.paused = m.Paused;
                 if (!string.IsNullOrEmpty(m.SpeedId)) Config.setWorldSpeed(m.SpeedId, false);
+                KingPaused = IsFollower && m.Paused;   // drives the "God King paused" indicator
             }
             catch (Exception e) { ModLog.Warn("ApplySimControl failed: " + e.Message); }
         }
@@ -977,6 +988,11 @@ namespace WorldboxMP.Client.Mirror
         {
             if (!Active || !IsKing) return;
 
+            // Sync ONLY the explicit pause (Config.paused = the pause button). The game's
+            // EFFECTIVE pause is `Config.paused || isWindowActive || ads` (decompiled) — so
+            // opening a dialog/menu pauses the King via the SEPARATE isWindowActive term WITHOUT
+            // setting Config.paused. Reading Config.paused therefore naturally excludes
+            // dialog-pauses, so followers keep playing while the God King is in a menu.
             bool paused = SafePaused();
             string speed = SafeSpeedId();
             // Broadcast on pause OR speed change — the follower runs a passive sim, so it
@@ -1126,6 +1142,11 @@ namespace WorldboxMP.Client.Mirror
 
         // ── Helpers ─────────────────────────────────────────────────────────
         private static bool SafePaused() { try { return Config.paused; } catch { return false; } }
+        private static bool SafeWindowActive() { try { return ScrollWindow.isWindowActive(); } catch { return false; } }
+
+        /// <summary>True on a follower while the God King has the game genuinely paused (synced).
+        /// Drives the on-screen "God King paused" indicator. Not set by the King's menu/window pauses.</summary>
+        public static bool KingPaused { get; private set; }
 
         private void Send(MirrorKind kind, byte[] payload, DeliveryMethod method = DeliveryMethod.ReliableOrdered) =>
             NetClient.Instance.SendMirror(kind, payload, method);

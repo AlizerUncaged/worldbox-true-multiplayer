@@ -105,6 +105,7 @@ namespace WorldboxMP.Client.Dev
                 case "joinroom": net?.JoinRoom(Get(q, "id", "").ToUpperInvariant(), Get(q, "pass", "")); return Ok("joinroom sent");
                 case "spawn": return Spawn(q);
                 case "speed": return Speed(q);
+                case "pause": try { Config.paused = GetI(q, "on", 1) != 0; } catch { } return Ok("paused " + Get(q, "on", "1"));
                 case "power": return Power(q);
                 default: return "{\"error\":\"unknown endpoint\"}";
             }
@@ -124,8 +125,9 @@ namespace WorldboxMP.Client.Dev
         private static string Speed(Dictionary<string, string> q)
         {
             int n = GetI(q, "n", 1);
-            try { if (n <= 0) Config.paused = true; else { Config.paused = false; AccessTools.Method(typeof(World), "setWorldSpeed", new[] { typeof(int) })?.Invoke(World.world, new object[] { n }); } } catch { }
-            return Ok("speed " + n);
+            // Game speed ids are "x1".."x8" via Config.setWorldSpeed(string,bool).
+            try { if (n <= 0) Config.paused = true; else { Config.paused = false; Config.setWorldSpeed("x" + n, false); } } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+            return Ok("speed x" + n);
         }
 
         private static string Power(Dictionary<string, string> q)
@@ -147,7 +149,13 @@ namespace WorldboxMP.Client.Dev
             sb.Append($"\"role\":\"{role}\",\"connState\":\"{net?.State}\",\"loggedIn\":{(net != null && net.LoggedIn ? "true" : "false")},");
             sb.Append($"\"roomId\":\"{Esc(net?.RoomId ?? "")}\",\"inRoom\":{(net != null && net.InRoom ? "true" : "false")},\"isKing\":{(net != null && net.IsKing ? "true" : "false")},");
             int actors = -1; try { actors = World.world.units.getSimpleList().Count; } catch { }
-            sb.Append($"\"actors\":{actors},");
+            bool paused = false; string speed = "?";
+            try { paused = Config.paused; } catch { }
+            try { speed = Config.time_scale_asset != null ? Config.time_scale_asset.id : "?"; } catch { }
+            bool winActive = false; try { winActive = ScrollWindow.isWindowActive(); } catch { }
+            int sapient = 0, mobs = 0;
+            try { var l = World.world.units.getSimpleList(); for (int i = 0; i < l.Count; i++) { var a = l[i]; if (a == null || !a.isAlive()) continue; if (a.isSapient()) sapient++; else mobs++; } } catch { }
+            sb.Append($"\"actors\":{actors},\"sapient\":{sapient},\"mobs\":{mobs},\"paused\":{(paused ? "true" : "false")},\"speed\":\"{Esc(speed)}\",\"winActive\":{(winActive ? "true" : "false")},\"kingPaused\":{(MirrorManager.KingPaused ? "true" : "false")},");
             // cities (enumerate _hashset, not stale list)
             sb.Append("\"cities\":[");
             int cc = 0;

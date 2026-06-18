@@ -13,6 +13,7 @@ namespace WorldboxMP.Client.UI
     public class PingHud : MonoBehaviour
     {
         private Text _label;
+        private Text _pauseLabel;
 
         public static void Spawn()
         {
@@ -47,12 +48,34 @@ namespace WorldboxMP.Client.UI
             rt.pivot = new Vector2(1f, 1f);
             rt.sizeDelta = new Vector2(160f, 20f);
             rt.anchoredPosition = new Vector2(-10f, -8f);
+
+            // Centered "God King paused" banner (top-center), shown only on followers while the
+            // God King has the game genuinely paused (not while he's just in a menu/window).
+            var pauseGo = new GameObject("GodKingPauseText", typeof(Text));
+            pauseGo.transform.SetParent(canvasGo.transform, false);
+            _pauseLabel = pauseGo.GetComponent<Text>();
+            OT.InitializeCommonText(_pauseLabel);
+            _pauseLabel.alignment = TextAnchor.UpperCenter;
+            _pauseLabel.horizontalOverflow = HorizontalWrapMode.Overflow;
+            _pauseLabel.verticalOverflow = VerticalWrapMode.Overflow;
+            _pauseLabel.fontSize = 18;
+            _pauseLabel.raycastTarget = false;
+            _pauseLabel.color = new Color(1f, 0.85f, 0.3f);
+            var prt = _pauseLabel.rectTransform;
+            prt.anchorMin = prt.anchorMax = new Vector2(0.5f, 1f);
+            prt.pivot = new Vector2(0.5f, 1f);
+            prt.sizeDelta = new Vector2(420f, 26f);
+            prt.anchoredPosition = new Vector2(0f, -36f);
+            _pauseLabel.text = "";
         }
 
         private void Update()
         {
             var net = NetClient.Instance;
             if (_label == null) return;
+
+            if (_pauseLabel != null)
+                _pauseLabel.text = Mirror.MirrorManager.KingPaused ? "⏸  The God King has paused the game" : "";
 
             if (net == null || net.State != ConnState.Connected)
             {
