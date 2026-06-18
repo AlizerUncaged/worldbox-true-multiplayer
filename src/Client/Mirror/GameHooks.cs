@@ -49,7 +49,7 @@ namespace WorldboxMP.Client.Mirror
 
                 var terraform = AccessTools.Method(typeof(MapAction), "terraformTile");
                 if (terraform != null)
-                    harmony.Patch(terraform, postfix: H(nameof(Terraform_Postfix)));
+                    harmony.Patch(terraform, prefix: H(nameof(Terraform_Prefix)), postfix: H(nameof(Terraform_Postfix)));
 
                 var die = AccessTools.Method(typeof(Actor), "die");
                 if (die != null) harmony.Patch(die, postfix: H(nameof(Die_Postfix)));
@@ -411,6 +411,15 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingTrait(__instance, pTraitID, false);
         }
 
+        // Terrain is king-authoritative: block autonomous terraform on followers (e.g. a
+        // drop/nuke explosion's crater) so it can't diverge — only the king's synced terraform
+        // (ApplyingRemote) applies. The visual fall/boom still plays; the crater comes from sync.
+        private static bool Terraform_Prefix()
+        {
+            var m = MirrorManager.Instance;
+            return !(m != null && m.IsFollower && !m.ApplyingRemote);
+        }
+
         private static void Terraform_Postfix(WorldTile pTile, TileType pNewTypeMain, TopTileType pTopType)
         {
             MirrorManager.Instance?.OnKingTerraform(pTile, pNewTypeMain, pTopType);
@@ -482,10 +491,12 @@ namespace WorldboxMP.Client.Mirror
                 Safe(_unitsCheckDestroy, units, null);                        // finalize corpses (death)
             }
             Safe(_mbUpdateBuildings, __instance, new object[] { pElapsed });   // building render (guarded elsewhere)
-            // NOTE: drop_manager/projectiles update is intentionally NOT run here — letting the
-            // follower simulate a synced nuke makes it RE-explode (double terrain damage, fire
-            // spread, endless shake, leftover sprites). Terrain/damage are king-authoritative;
-            // the drop's visual fall is sacrificed to avoid that divergence.
+            // Drops (nukes/bombs/meteors) + projectiles fall/fly via their managers' update so
+            // they're visible on the follower. Their explosions WOULD diverge the world, but the
+            // follower's autonomous terraform/fire are blocked (king-authoritative), so only the
+            // visual fall + boom plays; the crater/fire come from the king's synced events.
+            try { var dm = _dropMgrField?.GetValue(__instance); if (dm != null) _dropUpdate?.Invoke(dm, new object[] { pElapsed }); } catch { }
+            try { var pm = _projMgrField?.GetValue(__instance); if (pm != null) _projUpdate?.Invoke(pm, new object[] { pElapsed }); } catch { }
 
             if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
