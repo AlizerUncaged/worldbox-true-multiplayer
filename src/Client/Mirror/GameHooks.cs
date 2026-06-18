@@ -136,6 +136,12 @@ namespace WorldboxMP.Client.Mirror
                 PatchRemove(harmony, typeof(CultureManager), typeof(Culture));
                 PatchRemove(harmony, typeof(LanguageManager), typeof(Language));
                 PatchRemove(harmony, typeof(BuildingManager), typeof(Building));
+                // Bombs/disasters/fire destroy buildings via Building.startDestroyBuilding(), NOT
+                // BuildingManager.removeObject — so those destructions never reached followers
+                // (e.g. a volcano bombed away on the king persisted on the follower). Hook it and
+                // broadcast a removal so the follower removes the same building.
+                var destroyBuilding = AccessTools.Method(typeof(Building), "startDestroyBuilding");
+                if (destroyBuilding != null) harmony.Patch(destroyBuilding, postfix: H(nameof(BuildingDestroy_Postfix)));
 
                 // Actor membership/conversion (kingdom/religion/culture/language/city).
                 PatchMember(harmony, "joinKingdom", typeof(Kingdom));
@@ -413,6 +419,13 @@ namespace WorldboxMP.Client.Mirror
         private static void StructuralRemove_Postfix(object[] __args)
         {
             if (__args != null && __args.Length > 0) MirrorManager.Instance?.OnKingObjectRemove(__args[0]);
+        }
+
+        // A building began destruction (bomb/disaster/fire). Broadcast it as an object removal so
+        // followers remove the same building (the king's removeObject hook alone misses this path).
+        private static void BuildingDestroy_Postfix(Building __instance)
+        {
+            if (__instance != null) MirrorManager.Instance?.OnKingObjectRemove(__instance);
         }
 
         private static void Member_Postfix(Actor __instance, object[] __args)
