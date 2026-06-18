@@ -191,6 +191,14 @@ namespace WorldboxMP.Client.Mirror
         public bool OnLocalGodPower(Vector2Int pos, GodPower power)
         {
             if (!Active || power == null) return true;
+            // Inspection / info tools (Village Info, Kingdom Info, Inspect Unit, …) open a UI
+            // window instead of changing the world — they set unselect_when_window=true. These
+            // are LOCAL UI: do NOT mirror them (else clicking a village opens the dialogue on the
+            // other client too) and do NOT suppress them locally (let the clicker see their own
+            // window). Only world-changing powers get mirrored.
+            bool windowTool = false;
+            try { windowTool = power.unselect_when_window; } catch { }
+            if (windowTool) return true;
             Send(MirrorKind.GodPower, MirrorCodec.Write(new GodPowerMsg { PowerId = power.id, X = pos.x, Y = pos.y }));
             return IsKing;
         }
@@ -896,6 +904,21 @@ namespace WorldboxMP.Client.Mirror
                     try { a.setStamina(data.stamina, false); } catch { }
                     try { a.setMana(data.mana, false); } catch { }
                     try { a.setHappiness(data.happiness, false); } catch { }
+                    // City membership: setData sets data.cityID but does NOT add the actor to the
+                    // city's `units` list (that needs joinCity). Without this the follower's city
+                    // has 0 members -> population/families/leader-resident all show 0. Join the
+                    // actor to its city so City.getPopulationPeople() counts it.
+                    try
+                    {
+                        long cid = data.cityID;
+                        var targetCity = cid > 0 ? World.world.cities.get(cid) : null;
+                        if (a.city != targetCity)
+                        {
+                            if (targetCity != null) a.joinCity(targetCity);
+                            else if (a.city != null) a.joinCity(null);
+                        }
+                    }
+                    catch (Exception ce) { if (_resyncErr < 5) { _resyncErr++; ModLog.Warn("ApplyActorResync joinCity: " + ce.Message); } }
                 }
                 catch (Exception e) { if (_resyncErr < 5) { _resyncErr++; ModLog.Warn("ApplyActorResync: " + e.Message); } }
             }
