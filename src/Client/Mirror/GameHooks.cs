@@ -177,6 +177,13 @@ namespace WorldboxMP.Client.Mirror
                 _mbUpdateMapLayers = AccessTools.Method(typeof(MapBox), "updateMapLayers", new[] { typeof(float) });
                 _animUpdateTime    = AccessTools.Method(typeof(AnimationHelper), "updateTime", new[] { typeof(float), typeof(float) });
                 _enemiesClear      = AccessTools.Method(typeof(EnemiesFinder), "clear");
+                // Drops (nukes/bombs/meteors) + projectiles: their fall/flight physics live in
+                // these managers' update(); without them a synced nuke freezes in mid-air on
+                // the follower while only the terrain result syncs.
+                _dropMgrField = AccessTools.Field(typeof(MapBox), "drop_manager");
+                _dropUpdate   = _dropMgrField != null ? AccessTools.Method(_dropMgrField.FieldType, "update", new[] { typeof(float) }) : null;
+                _projMgrField = AccessTools.Field(typeof(MapBox), "projectiles");
+                _projUpdate   = _projMgrField != null ? AccessTools.Method(_projMgrField.FieldType, "update", new[] { typeof(float) }) : null;
                 // Full actor pipeline (the order updateSimulation uses) so movement isn't
                 // starved: refresh container → meta prep → visibility → batch update
                 // (movement/render) → destroy (death cleanup). ActorManager = units.
@@ -439,6 +446,8 @@ namespace WorldboxMP.Client.Mirror
 
         private static MethodInfo _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear;
         private static MethodInfo _unitsCheckContainer, _unitsPrepMeta, _unitsCalcVisible, _unitsUpdate, _unitsCheckDestroy;
+        private static FieldInfo _dropMgrField, _projMgrField;
+        private static MethodInfo _dropUpdate, _projUpdate;
         private static bool _passiveLogged;
 
         // Follower runs ONLY the visual + actor subset of the simulation at the king's
@@ -467,6 +476,9 @@ namespace WorldboxMP.Client.Mirror
                 Safe(_unitsCheckDestroy, units, null);                        // finalize corpses (death)
             }
             Safe(_mbUpdateBuildings, __instance, new object[] { pElapsed });   // building render (guarded elsewhere)
+            // Drops (nukes/bombs/meteors) + projectiles fall/fly via their managers' update.
+            try { var dm = _dropMgrField?.GetValue(__instance); if (dm != null) _dropUpdate?.Invoke(dm, new object[] { pElapsed }); } catch { }
+            try { var pm = _projMgrField?.GetValue(__instance); if (pm != null) _projUpdate?.Invoke(pm, new object[] { pElapsed }); } catch { }
 
             if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
