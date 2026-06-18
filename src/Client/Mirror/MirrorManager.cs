@@ -472,8 +472,10 @@ namespace WorldboxMP.Client.Mirror
         }
 
         // ── Incoming ────────────────────────────────────────────────────────
+        private int _rxLog;
         private void OnMirror(MirrorMessage msg)
         {
+            if (_rxLog < 60) { _rxLog++; ModLog.Info($"[RX] kind={(MirrorKind)msg.Kind} bytes={msg.Payload?.Length} isKing={IsKing} isFollower={IsFollower}"); }
             switch ((MirrorKind)msg.Kind)
             {
                 case MirrorKind.GodPower:

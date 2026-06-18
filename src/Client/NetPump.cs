@@ -63,6 +63,8 @@ namespace WorldboxMP.Client
                 Dev.CameraDiag.Dump("F10");
             Dev.MoveDiag.Tick(Time.unscaledDeltaTime);
             Dev.CityDiag.Tick(Time.unscaledDeltaTime);
+            Dev.DevRestServer.Start();   // lazy: binds first free port 8750+ once
+            Dev.DevRestServer.Drain();   // run queued HTTP control jobs on the main thread
 #endif
         }
 
