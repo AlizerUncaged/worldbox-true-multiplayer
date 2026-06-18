@@ -101,7 +101,7 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _addStatusMethod; // Actor.addStatusEffect(string,float,bool) is internal
 
         // Registry of structural objects synced generically (Data + manager.loadObject).
-        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; public MethodInfo ReloadInstance; public FieldInfo IdField; }
+        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; public MethodInfo ReloadInstance; public MethodInfo IdGetter; }
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
         private bool _applyingStatus, _applyingEquip, _applyingObject, _applyingMember, _applyingCapture, _applyingKProp;
 
@@ -282,7 +282,9 @@ namespace WorldboxMP.Client.Mirror
                     // (incl. City.data.zones = territory) in save(). Without this the synced
                     // CityData has empty zones -> no territory/banner on the follower.
                     Save = AccessTools.Method(obj, "save"),
-                    IdField = AccessTools.Field(data, "id") });
+                    // id is a PROPERTY on BaseSystemData (public long id { get; set; }), NOT a
+                    // field — AccessTools.Field would return null. Use the property getter.
+                    IdGetter = AccessTools.PropertyGetter(data, "id") });
             Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
             Reg(2, typeof(City), typeof(CityData), () => World.world.cities);
             // Cities expand and their name/stats change continuously, but we only get a create
@@ -669,9 +671,9 @@ namespace WorldboxMP.Client.Mirror
                         // If this object already exists (re-sent on long_poll), update it in place
                         // (e.g. City.loadCity re-applies grown territory + name + stats) instead of
                         // loadObject, which no-ops for an existing id and would freeze it.
-                        if (r.ReloadInstance != null && r.IdField != null)
+                        if (r.ReloadInstance != null && r.IdGetter != null)
                         {
-                            long id = Convert.ToInt64(r.IdField.GetValue(data));
+                            long id = Convert.ToInt64(r.IdGetter.Invoke(data, null));
                             var get = AccessTools.Method(mgr.GetType(), "get", new[] { typeof(long) });
                             var existing = id != 0 ? get?.Invoke(mgr, new object[] { id }) : null;
                             if (existing != null) { r.ReloadInstance.Invoke(existing, new[] { data }); DbgObjRecv++; return; }
