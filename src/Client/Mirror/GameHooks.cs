@@ -163,6 +163,12 @@ namespace WorldboxMP.Client.Mirror
                 var bbVis = AccessTools.Method(typeof(BatchBuildings), "updateVisibility");
                 if (bbVis != null) harmony.Patch(bbVis, finalizer: H(nameof(BatchBuildingsVisibility_Finalizer)));
 
+                // ActorManager.fillVisibleObjects (render path, runs every frame in
+                // MapBox.calculateVisibleObjects) NREs if a mirrored actor has a null asset or
+                // null current_tile (seen with elves). Swallow on followers so render survives.
+                var fillVis = AccessTools.Method(typeof(ActorManager), "fillVisibleObjects");
+                if (fillVis != null) harmony.Patch(fillVis, finalizer: H(nameof(FillVisibleObjects_Finalizer)));
+
                 // The mirrored world can contain buildings that aren't fully initialized
                 // on a follower (null asset/batch/current_tile). The follower's own sim
                 // then NREs on them in several places. Guard each crash site on followers
@@ -476,9 +482,10 @@ namespace WorldboxMP.Client.Mirror
                 Safe(_unitsCheckDestroy, units, null);                        // finalize corpses (death)
             }
             Safe(_mbUpdateBuildings, __instance, new object[] { pElapsed });   // building render (guarded elsewhere)
-            // Drops (nukes/bombs/meteors) + projectiles fall/fly via their managers' update.
-            try { var dm = _dropMgrField?.GetValue(__instance); if (dm != null) _dropUpdate?.Invoke(dm, new object[] { pElapsed }); } catch { }
-            try { var pm = _projMgrField?.GetValue(__instance); if (pm != null) _projUpdate?.Invoke(pm, new object[] { pElapsed }); } catch { }
+            // NOTE: drop_manager/projectiles update is intentionally NOT run here — letting the
+            // follower simulate a synced nuke makes it RE-explode (double terrain damage, fire
+            // spread, endless shake, leftover sprites). Terrain/damage are king-authoritative;
+            // the drop's visual fall is sacrificed to avoid that divergence.
 
             if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
@@ -539,6 +546,19 @@ namespace WorldboxMP.Client.Mirror
                 return false;
             }
             return true;
+        }
+
+        private static int _fillVisErr;
+        private static Exception FillVisibleObjects_Finalizer(Exception __exception)
+        {
+            if (__exception == null) return null;
+            var m = MirrorManager.Instance;
+            if (m != null && m.IsFollower)
+            {
+                if (_fillVisErr < 3) { _fillVisErr++; ModLog.Warn("[FOLLOWER] fillVisibleObjects swallowed (null asset/current_tile actor?): " + __exception.Message); }
+                return null;
+            }
+            return __exception;
         }
 
         private static int _bbErrLogged;
