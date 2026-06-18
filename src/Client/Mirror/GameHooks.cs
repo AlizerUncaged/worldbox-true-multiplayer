@@ -569,16 +569,27 @@ namespace WorldboxMP.Client.Mirror
         }
 
         private static readonly System.Collections.Generic.Dictionary<Type, MethodInfo> _checkListsCache = new System.Collections.Generic.Dictionary<Type, MethodInfo>();
-        // Rebuild a CoreSystemManager's lazy `list` cache from _hashset (checkLists early-returns
-        // unless _dirty_list). Game sim does this; passive sim must, or list-based render (names) breaks.
+        private static readonly System.Collections.Generic.Dictionary<Type, MethodInfo> _beginChecksUnitsCache = new System.Collections.Generic.Dictionary<Type, MethodInfo>();
+        // Rebuild a CoreSystemManager's caches that the passive sim would otherwise miss:
+        //  • checkLists()       -> the lazy `list` cache from _hashset (list-based render: names).
+        //  • beginChecksUnits() -> member `base.units` lists (clearAllUnitLists+updateDirtyUnits+
+        //    finishDirtyUnits), gated by _dirty_units. Without it a city's a.city links exist but
+        //    base.units is empty -> getPopulationPeople()=0 -> 0 population/families/residents.
+        // Both early-return unless their dirty flag is set, so calling every frame is cheap.
         private static void RefreshList(object mgr)
         {
             if (mgr == null) return;
+            var t = mgr.GetType();
             try
             {
-                var t = mgr.GetType();
                 if (!_checkListsCache.TryGetValue(t, out var mi)) { mi = AccessTools.Method(t, "checkLists"); _checkListsCache[t] = mi; }
                 mi?.Invoke(mgr, null);
+            }
+            catch { }
+            try
+            {
+                if (!_beginChecksUnitsCache.TryGetValue(t, out var bu)) { bu = AccessTools.Method(t, "beginChecksUnits"); _beginChecksUnitsCache[t] = bu; }
+                bu?.Invoke(mgr, null);
             }
             catch { }
         }
