@@ -690,12 +690,14 @@ namespace WorldboxMP.Client.Mirror
         {
             var tile = World.world?.GetTile(m.X, m.Y);
             if (tile == null) return;
+            ApplyingRemote = true;   // let this synced fire through the Fire_Prefix block
             try
             {
                 if (m.On) WorldBehaviourActionFire.addFire(tile);
                 else WorldBehaviourActionFire.removeFire(tile);
             }
             catch (Exception e) { ModLog.Warn("ApplyFire failed: " + e.Message); }
+            finally { ApplyingRemote = false; }
         }
 
         private void ApplyHealth(HealthMsg m)

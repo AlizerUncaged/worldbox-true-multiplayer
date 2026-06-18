@@ -59,8 +59,19 @@ namespace WorldboxMP.Client.Mirror
                 var die = AccessTools.Method(typeof(Actor), "die");
                 if (die != null) harmony.Patch(die, postfix: H(nameof(Die_Postfix)));
 
+                // Drops fall + animate on followers (drop_manager.update in the passive sim), but
+                // their landing EXPLOSION (action_landed = terraform/fire/effect/shake) must NOT run
+                // — that's king-authoritative and double-running it leaves a frozen explosion sprite
+                // + endless shake + divergent terrain. Prefix Drop.land() on followers to skip the
+                // explosion yet still landDrop() (remove the drop) so it disappears cleanly. The
+                // crater/fire/deaths arrive via the king's synced terraform/fire/health.
+                var dropLand = AccessTools.Method(typeof(Drop), "land");
+                if (dropLand != null) harmony.Patch(dropLand, prefix: H(nameof(DropLand_Prefix)));
+                _dropLandedField = AccessTools.Field(typeof(Drop), "_landed");
+                _landDropMethod = AccessTools.Method(AccessTools.TypeByName("DropManager"), "landDrop");
+
                 var addFire = AccessTools.Method(typeof(WorldBehaviourActionFire), "addFire");
-                if (addFire != null) harmony.Patch(addFire, postfix: H(nameof(AddFire_Postfix)));
+                if (addFire != null) harmony.Patch(addFire, prefix: H(nameof(Fire_Prefix)), postfix: H(nameof(AddFire_Postfix)));
                 var removeFire = AccessTools.Method(typeof(WorldBehaviourActionFire), "removeFire");
                 if (removeFire != null) harmony.Patch(removeFire, postfix: H(nameof(RemoveFire_Postfix)));
 
@@ -464,6 +475,33 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingDeath(__instance);
         }
 
+        // Follower: a falling drop reached the ground. Skip its explosion (action_landed) — that
+        // is king-authoritative — but still remove the drop (landDrop) so it doesn't freeze in
+        // place. Returns false to skip the original land(). King/idle run land() normally.
+        private static bool DropLand_Prefix(Drop __instance)
+        {
+            var m = MirrorManager.Instance;
+            if (m == null || !m.IsFollower) return true;
+            try
+            {
+                var dm = _dropMgrField?.GetValue(World.world);
+                if (dm != null && _landDropMethod != null) _landDropMethod.Invoke(dm, new object[] { __instance });
+                _dropLandedField?.SetValue(__instance, true);
+            }
+            catch (Exception e) { if (_dropLandErr < 3) { _dropLandErr++; ModLog.Warn("[FOLLOWER] DropLand_Prefix: " + e.Message); } }
+            return false;
+        }
+        private static int _dropLandErr;
+
+        // Fire is king-authoritative: block autonomous fire on followers (e.g. a drop/bomb
+        // explosion igniting tiles) so re-running the drop sim for the falling VISUAL can't
+        // diverge the world. Only the king's synced fire (ApplyingRemote) applies.
+        private static bool Fire_Prefix()
+        {
+            var m = MirrorManager.Instance;
+            return !(m != null && m.IsFollower && !m.ApplyingRemote);
+        }
+
         private static void AddFire_Postfix(WorldTile pTile)
         {
             MirrorManager.Instance?.OnKingFire(pTile, true);
@@ -495,8 +533,8 @@ namespace WorldboxMP.Client.Mirror
 
         private static MethodInfo _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear, _buildingsUpdate, _buildingZonesUpdate, _cityStatusUpdate;
         private static MethodInfo _unitsCheckContainer, _unitsPrepMeta, _unitsCalcVisible, _unitsUpdate, _unitsCheckDestroy;
-        private static FieldInfo _dropMgrField, _projMgrField;
-        private static MethodInfo _dropUpdate, _projUpdate;
+        private static FieldInfo _dropMgrField, _projMgrField, _dropLandedField;
+        private static MethodInfo _dropUpdate, _projUpdate, _landDropMethod;
         private static bool _passiveLogged;
 
         // Follower runs ONLY the visual + actor subset of the simulation at the king's
@@ -551,10 +589,13 @@ namespace WorldboxMP.Client.Mirror
                     foreach (var c in cities) if (c != null) Safe(_cityStatusUpdate, c, null);
             }
             catch { }
-            // Drops/projectiles intentionally NOT simulated on the follower: their explosions
-            // have too many divergent side-effects (fire spread, effect/tentacle spawns, endless
-            // building shake) beyond terraform. The nuke's visual fall is sacrificed; terrain,
-            // fire and damage all come authoritatively from the king's synced events.
+            // Drops (nukes/bombs/meteors) + projectiles: run their managers' update so they FALL
+            // and animate on the follower (otherwise they hang frozen mid-air). Their explosions'
+            // world-changing side-effects are now neutralized: terraform (Terraform_Prefix) and
+            // fire (Fire_Prefix) are blocked on followers, and damage is king-authoritative via the
+            // resync. So only the visual fall + boom plays; the crater/fire/deaths come from sync.
+            try { var dm = _dropMgrField?.GetValue(__instance); if (dm != null) _dropUpdate?.Invoke(dm, new object[] { pElapsed }); } catch { }
+            try { var pm = _projMgrField?.GetValue(__instance); if (pm != null) _projUpdate?.Invoke(pm, new object[] { pElapsed }); } catch { }
 
             if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
