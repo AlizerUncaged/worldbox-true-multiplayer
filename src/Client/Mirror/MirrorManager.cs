@@ -993,25 +993,31 @@ namespace WorldboxMP.Client.Mirror
                 // continuously, but we only get a create event once. Re-send each city/kingdom so
                 // the follower's territory + name + stats track the king (ApplyObject updates the
                 // existing one in place via loadCity). Cheap: a handful of cities, not per-tile.
-                RefreshStructural(typeof(CityManager), World.world?.cities);
-                RefreshStructural(typeof(KingdomManager), World.world?.kingdoms);
+                RefreshStructural(World.world?.cities);
+                RefreshStructural(World.world?.kingdoms);
             }
             catch (Exception e) { ModLog.Warn("SendLongPoll failed: " + e.Message); }
         }
 
         // Re-broadcast every live object of a manager (cities/kingdoms) via OnKingObject, which
         // save()s + serializes current state. Followers apply as an in-place update.
-        private void RefreshStructural(Type mgrType, object mgr)
+        // NOTE: CityManager/KingdomManager : CoreSystemManager — they have NO getSimpleList
+        // (that's on the ActorManager/BuildingManager hierarchy). They expose a public `list`
+        // field (List<TObject>) and are IEnumerable. Enumerate via `list`.
+        private void RefreshStructural(object mgr)
         {
             if (mgr == null) return;
             try
             {
-                var getList = AccessTools.Method(mgrType, "getSimpleList");
-                var listObj = getList?.Invoke(mgr, null) as System.Collections.IEnumerable;
-                if (listObj == null) return;
-                foreach (var o in listObj) OnKingObject(o);
+                var lf = AccessTools.Field(mgr.GetType(), "list");
+                var listObj = lf?.GetValue(mgr) as System.Collections.IEnumerable;
+                if (listObj == null) listObj = mgr as System.Collections.IEnumerable; // CoreSystemManager is IEnumerable
+                if (listObj == null) { ModLog.Warn($"RefreshStructural: no list on {mgr.GetType().Name}"); return; }
+                var snapshot = new List<object>();
+                foreach (var o in listObj) if (o != null) snapshot.Add(o);
+                foreach (var o in snapshot) OnKingObject(o);
             }
-            catch (Exception e) { ModLog.Warn($"RefreshStructural({mgrType.Name}) failed: " + e.Message); }
+            catch (Exception e) { ModLog.Warn($"RefreshStructural({mgr.GetType().Name}) failed: " + e.Message); }
         }
 
         // ── Snapshots ───────────────────────────────────────────────────────
