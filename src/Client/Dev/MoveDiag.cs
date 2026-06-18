@@ -90,6 +90,9 @@ namespace WorldboxMP.Client.Dev
                 MirrorManager.DbgObjSent = MirrorManager.DbgObjRecv = 0; MirrorManager.DbgLastMoveEx = "";
 
                 int simCalls = GameHooks.SimCallsThisInterval; GameHooks.SimCallsThisInterval = 0;
+                int buildings = -1;
+                try { buildings = w.buildings.getSimpleList().Count; } catch { }
+                actorInfo += $" buildings={buildings}";
                 bool paused = false, cfgPaused = false, winActive = false;
                 try { paused = World.world.isPaused(); } catch { }
                 try { cfgPaused = Config.paused; } catch { }
