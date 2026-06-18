@@ -1032,10 +1032,11 @@ namespace WorldboxMP.Client.Mirror
             if (mgr == null) return;
             try
             {
-                var lf = AccessTools.Field(mgr.GetType(), "list");
-                var listObj = lf?.GetValue(mgr) as System.Collections.IEnumerable;
-                if (listObj == null) listObj = mgr as System.Collections.IEnumerable; // CoreSystemManager is IEnumerable
-                if (listObj == null) { ModLog.Warn($"RefreshStructural: no list on {mgr.GetType().Name}"); return; }
+                // Enumerate the manager itself (CoreSystemManager.GetEnumerator -> _hashset), NOT
+                // its `list` field — `list` is rebuilt only by checkLists() in the game sim.
+                var listObj = mgr as System.Collections.IEnumerable;
+                if (listObj == null) { var lf = AccessTools.Field(mgr.GetType(), "list"); listObj = lf?.GetValue(mgr) as System.Collections.IEnumerable; }
+                if (listObj == null) { ModLog.Warn($"RefreshStructural: not enumerable {mgr.GetType().Name}"); return; }
                 var snapshot = new List<object>();
                 foreach (var o in listObj) if (o != null) snapshot.Add(o);
                 foreach (var o in snapshot) OnKingObject(o);

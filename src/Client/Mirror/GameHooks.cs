@@ -517,11 +517,12 @@ namespace WorldboxMP.Client.Mirror
             // Rebuild each dirty zone's buildings_render_list so high-res render finds buildings.
             try { _buildingZonesUpdate?.Invoke(null, null); } catch { }
             // Recompute city status (population/families/housing) from member units on the follower.
+            // IMPORTANT: enumerate the manager itself (CoreSystemManager.GetEnumerator -> _hashset),
+            // NOT its `list` field — `list` is only rebuilt by checkLists() (game sim, which we skip)
+            // so on followers it's stale/empty even though the cities exist in _hashset.
             try
             {
-                var cm = World.world?.cities;
-                var lf = cm != null ? AccessTools.Field(cm.GetType(), "list") : null;
-                if (lf?.GetValue(cm) is System.Collections.IEnumerable cities)
+                if (World.world?.cities is System.Collections.IEnumerable cities)
                     foreach (var c in cities) if (c != null) Safe(_cityStatusUpdate, c, null);
             }
             catch { }

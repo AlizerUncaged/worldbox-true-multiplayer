@@ -34,9 +34,10 @@ namespace WorldboxMP.Client.Dev
                 string role = mm == null ? "?" : (mm.IsKing ? "KING" : (mm.IsFollower ? "FOLLOWER" : "idle"));
                 var cm = World.world?.cities;
                 if (cm == null) return;
-                var listF = AccessTools.Field(cm.GetType(), "list");
-                var list = listF?.GetValue(cm) as IEnumerable;
-                if (list == null) { ModLog.Info($"[CITYDIAG] role={role} cities.list NULL (mgr={cm.GetType().Name})"); return; }
+                // Enumerate the manager (-> _hashset), NOT the `list` field (rebuilt only by the
+                // game sim's checkLists(), which the follower skips -> stale empty `list`).
+                var list = cm as IEnumerable;
+                if (list == null) { ModLog.Info($"[CITYDIAG] role={role} cities not enumerable (mgr={cm.GetType().Name})"); return; }
 
                 int n = 0, total = 0;
                 foreach (var c in list) { total++; }

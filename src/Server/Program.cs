@@ -10,8 +10,8 @@ namespace WorldboxMP.Server
     internal static class Program
     {
         // Defaults; override with env vars WBMP_MONGO / WBMP_PORT.
-        // Atlas SRV cluster; db name (wmulti) is supplied by Database when the
-        // connection string omits it.
+        // Self-hosted MongoDB (authSource=admin). Password is %-encoded in the URI
+        // (?! -> %3F!). db name (worldboxmp) is supplied in the connection string.
         private const string DefaultMongo =
             "mongodb://localhost:27017/wbmp";
 
