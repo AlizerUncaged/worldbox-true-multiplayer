@@ -248,6 +248,11 @@ namespace WorldboxMP.Client.Mirror
                     if (subId != 0)
                     {
                         var sub = World.world.subspecies.get(subId);
+                        // NOTE: calling sub.save() here to populate data.saved_chromosome_data (the
+                        // genome — needed for the follower to derive isSapient/base_stats) DESTABILIZED
+                        // the follower (snapshot reload + "duplicate key" → world wiped). Reverted;
+                        // sapient-count parity needs a safer genome-sync path (TODO). Stats stay
+                        // king-authoritative via the resync, which is stable.
                         var subData = sub != null ? _subDataField?.GetValue(sub) as SubspeciesData : null;
                         if (subData != null) subJson = JsonConvert.SerializeObject(subData, JsonHelper.read_settings);
                     }
