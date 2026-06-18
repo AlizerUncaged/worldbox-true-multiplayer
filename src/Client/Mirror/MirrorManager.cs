@@ -315,14 +315,22 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn("OnKingEquip failed: " + e.Message); }
         }
 
+        private int _objDbg;
         public void OnKingObject(object obj)
         {
+            if (_objDbg < 16)
+            {
+                _objDbg++;
+                ModLog.Info($"[KING] OnKingObject({obj?.GetType().Name}): Active={Active} IsKing={IsKing} applyingObj={_applyingObject}");
+            }
             if (!Active || !IsKing || _applyingObject || obj == null) return;
             try
             {
+                bool matched = false;
                 foreach (var r in _objReg)
                     if (r.ObjType.IsInstanceOfType(obj))
                     {
+                        matched = true;
                         // Populate save-derived fields on the live data first (asset_id, etc.).
                         try { r.PrepareForSave?.Invoke(obj, null); } catch (Exception pe) { ModLog.Warn($"[KING] {r.ObjType.Name}.prepareForSave: " + pe.Message); }
                         object data = null;
@@ -332,8 +340,10 @@ namespace WorldboxMP.Client.Mirror
                         Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg
                         { Kind = r.Kind, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
                         DbgObjSent++;
+                        ModLog.Info($"[KING] synced object {r.ObjType.Name} (kind={r.Kind})");
                         return;
                     }
+                if (!matched && _objDbg < 16) ModLog.Warn($"[KING] OnKingObject: NO registry match for {obj.GetType().Name}");
             }
             catch (Exception e) { ModLog.Warn("OnKingObject failed: " + e.Message); }
         }
