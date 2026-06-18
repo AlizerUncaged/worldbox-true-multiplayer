@@ -516,13 +516,23 @@ namespace WorldboxMP.Client.Mirror
             try { var b = World.world?.buildings; if (b != null) Safe(_buildingsUpdate, b, new object[] { pElapsed }); } catch { }
             // Rebuild each dirty zone's buildings_render_list so high-res render finds buildings.
             try { _buildingZonesUpdate?.Invoke(null, null); } catch { }
+            // Keep each meta-manager's `list` cache fresh. The game sim calls checkLists() (rebuilds
+            // list from _hashset when _dirty_list); the passive sim skips it, so `list` stays stale/
+            // empty on followers — and MANY systems iterate `list`: nameplate/banner rendering (city
+            // + kingdom names on the map), stats, etc. checkLists() is cheap (early-returns unless
+            // dirty). Without this, synced cities/kingdoms exist (get/_hashset) but have no map name.
+            var w = World.world;
+            if (w != null)
+            {
+                RefreshList(w.cities); RefreshList(w.kingdoms); RefreshList(w.cultures);
+                RefreshList(w.languages); RefreshList(w.religions); RefreshList(w.clans);
+                RefreshList(w.families); RefreshList(w.plots); RefreshList(w.alliances); RefreshList(w.wars);
+            }
             // Recompute city status (population/families/housing) from member units on the follower.
-            // IMPORTANT: enumerate the manager itself (CoreSystemManager.GetEnumerator -> _hashset),
-            // NOT its `list` field — `list` is only rebuilt by checkLists() (game sim, which we skip)
-            // so on followers it's stale/empty even though the cities exist in _hashset.
+            // Enumerate the manager itself (CoreSystemManager.GetEnumerator -> _hashset), NOT `list`.
             try
             {
-                if (World.world?.cities is System.Collections.IEnumerable cities)
+                if (w?.cities is System.Collections.IEnumerable cities)
                     foreach (var c in cities) if (c != null) Safe(_cityStatusUpdate, c, null);
             }
             catch { }
@@ -541,6 +551,21 @@ namespace WorldboxMP.Client.Mirror
             if (mi == null) return;
             try { mi.Invoke(inst, args); }
             catch (Exception e) { if (_passiveErrs < 6) { _passiveErrs++; ModLog.Warn($"[FOLLOWER] passive {mi.Name} skipped: " + (e.InnerException ?? e).Message); } }
+        }
+
+        private static readonly System.Collections.Generic.Dictionary<Type, MethodInfo> _checkListsCache = new System.Collections.Generic.Dictionary<Type, MethodInfo>();
+        // Rebuild a CoreSystemManager's lazy `list` cache from _hashset (checkLists early-returns
+        // unless _dirty_list). Game sim does this; passive sim must, or list-based render (names) breaks.
+        private static void RefreshList(object mgr)
+        {
+            if (mgr == null) return;
+            try
+            {
+                var t = mgr.GetType();
+                if (!_checkListsCache.TryGetValue(t, out var mi)) { mi = AccessTools.Method(t, "checkLists"); _checkListsCache[t] = mi; }
+                mi?.Invoke(mgr, null);
+            }
+            catch { }
         }
 
         // Stop the follower from autonomously constructing buildings (king is authoritative).
