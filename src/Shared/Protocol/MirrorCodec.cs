@@ -18,6 +18,9 @@ namespace WorldboxMP.Shared.Protocol
         public long SubId;            // subspecies id referenced by the actor (0 = none)
         public string SubspeciesJson; // serialized SubspeciesData (empty if none/already known)
         public string ActorJson;      // serialized ActorData
+        public bool SubSapient;       // king's subspecies.isSapient() (the meta tag derives from the
+                                      // genome, which we don't fully sync; set the flag directly so
+                                      // the follower's Sapient-Population stat matches).
     }
     public struct EntityPos { public long KingId; public float X; public float Y; public float H; }
     public struct SimControlMsg { public bool Paused; public string SpeedId; }
@@ -62,13 +65,13 @@ namespace WorldboxMP.Shared.Protocol
         public static byte[] Write(SpawnMsg m)
         {
             var w = new NetDataWriter();
-            w.Put(m.SubId); w.Put(m.SubspeciesJson ?? ""); w.Put(m.ActorJson ?? "");
+            w.Put(m.SubId); w.Put(m.SubspeciesJson ?? ""); w.Put(m.ActorJson ?? ""); w.Put(m.SubSapient);
             return w.CopyData();
         }
         public static SpawnMsg ReadSpawn(byte[] data)
         {
             var r = new NetDataReader(data);
-            return new SpawnMsg { SubId = r.GetLong(), SubspeciesJson = r.GetString(), ActorJson = r.GetString() };
+            return new SpawnMsg { SubId = r.GetLong(), SubspeciesJson = r.GetString(), ActorJson = r.GetString(), SubSapient = r.GetBool() };
         }
 
         public static byte[] Write(TerrainMsg m)

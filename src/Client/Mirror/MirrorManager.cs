@@ -54,6 +54,7 @@ namespace WorldboxMP.Client.Mirror
         }
         private static MethodInfo _checkSprite;
         private static MethodInfo _cacheTags;
+        private static FieldInfo _isSapientField;
         private static FieldInfo _eraField;
         private static MethodInfo _eraLoadAge;
         private static FieldInfo _statsField;        // Actor.stats (BaseStats)
@@ -144,6 +145,7 @@ namespace WorldboxMP.Client.Mirror
             _die = AccessTools.Method(typeof(Actor), "die");
             _checkSprite = AccessTools.Method(typeof(Actor), "checkSpriteToRender");
             _cacheTags = AccessTools.Method(typeof(Subspecies), "cacheTags");
+            _isSapientField = AccessTools.Field(typeof(Subspecies), "_is_sapient");
             _eraField = AccessTools.Field(typeof(MapBox), "era_manager");
             _eraLoadAge = AccessTools.Method(AccessTools.TypeByName("WorldAgeManager"), "loadAge");
             _setStatsDirty = AccessTools.Method(typeof(Actor), "setStatsDirty");
@@ -246,12 +248,14 @@ namespace WorldboxMP.Client.Mirror
 
                 long subId = 0;
                 string subJson = "";
+                bool subSapient = false;
                 try
                 {
                     subId = data.subspecies;
                     if (subId != 0)
                     {
                         var sub = World.world.subspecies.get(subId);
+                        try { subSapient = sub != null && sub.isSapient(); } catch { }
                         // NOTE: calling sub.save() here to populate data.saved_chromosome_data (the
                         // genome — needed for the follower to derive isSapient/base_stats) DESTABILIZED
                         // the follower (snapshot reload + "duplicate key" → world wiped). Reverted;
@@ -264,7 +268,7 @@ namespace WorldboxMP.Client.Mirror
                 catch (Exception se) { ModLog.Warn("[KING] subspecies serialize skipped: " + se.Message); }
 
                 string actorJson = JsonConvert.SerializeObject(data, JsonHelper.read_settings);
-                Send(MirrorKind.SpawnUnit, MirrorCodec.Write(new SpawnMsg { SubId = subId, SubspeciesJson = subJson, ActorJson = actorJson }));
+                Send(MirrorKind.SpawnUnit, MirrorCodec.Write(new SpawnMsg { SubId = subId, SubspeciesJson = subJson, ActorJson = actorJson, SubSapient = subSapient }));
                 ModLog.Info($"[KING] broadcast spawn id={actor.id} sub={subId} actor={actorJson.Length}B sub={subJson.Length}B");
             }
             catch (Exception e) { ModLog.Error("OnKingSpawned failed: " + e); }
@@ -606,15 +610,16 @@ namespace WorldboxMP.Client.Mirror
                 if (m.SubId != 0 && !string.IsNullOrEmpty(m.SubspeciesJson) && World.world.subspecies.get(m.SubId) == null)
                 {
                     var subData = JsonConvert.DeserializeObject<SubspeciesData>(m.SubspeciesJson, JsonHelper.read_settings);
-                    if (subData != null)
-                    {
-                        var sub = World.world.subspecies.loadObject(subData);
-                        // Recompute cached meta-tag flags (_is_sapient = hasMetaTag("has_sapience"),
-                        // needs_food, etc.). loadObject doesn't run cacheTags() with traits ready, so
-                        // without this the follower's humans report isSapient()=false -> they're
-                        // counted as Mobs instead of Sapient Population in the world stats.
-                        try { _cacheTags?.Invoke(sub, null); } catch (Exception ce) { ModLog.Warn("[FOLLOWER] subspecies cacheTags: " + ce.Message); }
-                    }
+                    if (subData != null) World.world.subspecies.loadObject(subData);
+                }
+                // Force the sapient flag from the king. _is_sapient is derived from the genome
+                // (nucleus meta tags) which we don't fully sync, so the follower would compute false
+                // → humans miscounted as Mobs. Set it directly (whether the subspecies is new or
+                // already known) so the world's Sapient-Population stat matches the king.
+                if (m.SubId != 0 && _isSapientField != null)
+                {
+                    try { var s = World.world.subspecies.get(m.SubId); if (s != null) _isSapientField.SetValue(s, m.SubSapient); }
+                    catch (Exception se) { if (_ageLog < 8) ModLog.Warn("[FOLLOWER] set _is_sapient: " + se.Message); }
                 }
                 // 2) Rebuild the exact actor from its data (same id, stats, traits, equipment…).
                 //    Pass the data straight to the game's own loader (it reads the data
