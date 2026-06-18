@@ -97,7 +97,18 @@ namespace WorldboxMP.Client.Mirror
                 PatchCreate(harmony, typeof(ReligionManager), "newReligion", typeof(Religion));
                 PatchCreate(harmony, typeof(CultureManager), "newCulture", typeof(Culture));
                 PatchCreate(harmony, typeof(LanguageManager), "newLanguage", typeof(Language));
-                PatchCreate(harmony, typeof(BuildingManager), "addBuilding", typeof(Building));
+                // Buildings: hook the FUNNEL overload addBuilding(BuildingAsset, WorldTile, …)
+                // — addBuilding(string,…) calls it, and civs/placement may call it directly,
+                // so this catches every addBuilding-based creation (e.g. village huts). NOTE:
+                // flora (trees/bushes/rocks) is created via addTree/addFlora, NOT addBuilding,
+                // so it is not covered here (those grow autonomously and aren't player-relevant).
+                foreach (var mi in typeof(BuildingManager).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    if (mi.Name != "addBuilding") continue;
+                    var ps = mi.GetParameters();
+                    if (ps.Length > 0 && ps[0].ParameterType == typeof(BuildingAsset) && typeof(Building).IsAssignableFrom(mi.ReturnType))
+                    { harmony.Patch(mi, postfix: H(nameof(StructuralCreate_Postfix))); break; }
+                }
 
                 // Structural object destruction (removeObject) — one postfix for all.
                 PatchRemove(harmony, typeof(KingdomManager), typeof(Kingdom));
