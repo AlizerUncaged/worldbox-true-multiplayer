@@ -491,12 +491,10 @@ namespace WorldboxMP.Client.Mirror
                 Safe(_unitsCheckDestroy, units, null);                        // finalize corpses (death)
             }
             Safe(_mbUpdateBuildings, __instance, new object[] { pElapsed });   // building render (guarded elsewhere)
-            // Drops (nukes/bombs/meteors) + projectiles fall/fly via their managers' update so
-            // they're visible on the follower. Their explosions WOULD diverge the world, but the
-            // follower's autonomous terraform/fire are blocked (king-authoritative), so only the
-            // visual fall + boom plays; the crater/fire come from the king's synced events.
-            try { var dm = _dropMgrField?.GetValue(__instance); if (dm != null) _dropUpdate?.Invoke(dm, new object[] { pElapsed }); } catch { }
-            try { var pm = _projMgrField?.GetValue(__instance); if (pm != null) _projUpdate?.Invoke(pm, new object[] { pElapsed }); } catch { }
+            // Drops/projectiles intentionally NOT simulated on the follower: their explosions
+            // have too many divergent side-effects (fire spread, effect/tentacle spawns, endless
+            // building shake) beyond terraform. The nuke's visual fall is sacrificed; terrain,
+            // fire and damage all come authoritatively from the king's synced events.
 
             if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
