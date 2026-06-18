@@ -719,24 +719,22 @@ namespace WorldboxMP.Client.Mirror
                         var data = JsonConvert.DeserializeObject(m.Json, r.DataType, JsonHelper.read_settings);
                         var mgr = r.Mgr();
                         if (mgr == null) return;
-                        // If this object already exists (re-sent on long_poll), update it in place
-                        // (e.g. City.loadCity re-applies grown territory + name + stats) instead of
-                        // loadObject, which no-ops for an existing id and would freeze it.
-                        if (r.ReloadInstance != null && r.IdGetter != null)
+                        // Structural objects are re-sent every long_poll. If this id ALREADY exists,
+                        // we must NOT loadObject it again — loadObject on an existing id throws
+                        // (TargetInvocationException, e.g. kind=1 Kingdom). Instead: update in place
+                        // if we have an updater (City.loadCity re-applies territory/name/stats), else
+                        // just skip (we already have it; e.g. kingdoms derive territory from cities).
+                        object existing = null;
+                        if (r.IdGetter != null)
                         {
                             long id = Convert.ToInt64(r.IdGetter.Invoke(data, null));
                             var get = AccessTools.Method(mgr.GetType(), "get", new[] { typeof(long) });
-                            var existing = id != 0 ? get?.Invoke(mgr, new object[] { id }) : null;
-                            if (_applyObjLog < 12)
-                            {
-                                _applyObjLog++;
-                                string nm = "?"; long lid = -1; int zc = -1;
-                                try { nm = (string)AccessTools.PropertyGetter(r.DataType, "name")?.Invoke(data, null); } catch { }
-                                try { lid = Convert.ToInt64(AccessTools.PropertyGetter(r.DataType, "leaderID")?.Invoke(data, null) ?? -1L); } catch { }
-                                try { zc = (AccessTools.Field(r.DataType, "zones")?.GetValue(data) as System.Collections.ICollection)?.Count ?? -1; } catch { }
-                                ModLog.Info($"[FOLLOWER] ApplyObject kind={m.Kind} id={id} name='{nm}' leaderID={lid} dataZones={zc} existing={(existing != null ? "UPDATE" : "CREATE")} jsonLen={m.Json?.Length}");
-                            }
-                            if (existing != null) { r.ReloadInstance.Invoke(existing, new[] { data }); DbgObjRecv++; return; }
+                            existing = id != 0 ? get?.Invoke(mgr, new object[] { id }) : null;
+                        }
+                        if (existing != null)
+                        {
+                            if (r.ReloadInstance != null) { r.ReloadInstance.Invoke(existing, new[] { data }); DbgObjRecv++; }
+                            return;   // already have it — never re-loadObject (throws on duplicate id)
                         }
                         var load = AccessTools.Method(mgr.GetType(), "loadObject", new[] { r.DataType });
                         load?.Invoke(mgr, new[] { data });
