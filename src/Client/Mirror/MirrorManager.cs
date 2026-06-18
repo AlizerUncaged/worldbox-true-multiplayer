@@ -207,9 +207,13 @@ namespace WorldboxMP.Client.Mirror
             try { dropId = power.drop_id; } catch { }
             try { tileType = power.tile_type; } catch { }
             try { actorAsset = power.actor_asset_id; } catch { }
-            bool inspection = windowTool && string.IsNullOrEmpty(actorAsset) && !terra
-                              && string.IsNullOrEmpty(dropId) && string.IsNullOrEmpty(tileType)
-                              && ptype == "PowerSpecial";
+            // Selection/inspection tools open a UI window with NO world effect and must NOT be
+            // mirrored. Confirmed ids from the decompiled PowerLibrary: "city_select", "inspect".
+            // (These have unselect_when_window=FALSE, so the flag heuristic alone misses them.)
+            bool inspection = _inspectionPowers.Contains(power.id)
+                              || (windowTool && string.IsNullOrEmpty(actorAsset) && !terra
+                                  && string.IsNullOrEmpty(dropId) && string.IsNullOrEmpty(tileType)
+                                  && ptype == "PowerSpecial");
             if (_godLog < 30)
             {
                 _godLog++;
@@ -356,6 +360,9 @@ namespace WorldboxMP.Client.Mirror
         private int _kingObjLog;
         private int _godLog;
         private int _cityJoinLog;
+        // God powers that only open a UI window (selection/inspection) — never mirror these.
+        private static readonly System.Collections.Generic.HashSet<string> _inspectionPowers =
+            new System.Collections.Generic.HashSet<string> { "city_select", "inspect" };
         public void OnKingObject(object obj)
         {
             if (_objDbg < 16)

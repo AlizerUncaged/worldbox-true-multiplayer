@@ -36,11 +36,16 @@ namespace WorldboxMP.Client.Mirror
                     new[] { typeof(WorldTile), typeof(string), typeof(float), typeof(float), typeof(long) });
                 if (dropSpawn != null) harmony.Patch(dropSpawn, postfix: H(nameof(DropSpawn_Postfix)));
 
-                // createNewUnit is the core spawn funnel — catches player spawns AND
-                // births/reproduction/mutations (which all route through it).
+                // createNewUnit catches player/miracle spawns. BUT village BIRTHS use a SEPARATE
+                // method, createBabyActorFromData(ActorData, WorldTile, City) — not createNewUnit.
+                // Without hooking it, born citizens never broadcast -> followers have no city
+                // members -> city population stays 0. Hook both.
                 var spawn = AccessTools.Method(typeof(ActorManager), "createNewUnit");
                 if (spawn != null)
                     harmony.Patch(spawn, postfix: H(nameof(CreateNewUnit_Postfix)));
+                var babySpawn = AccessTools.Method(typeof(ActorManager), "createBabyActorFromData");
+                if (babySpawn != null)
+                    harmony.Patch(babySpawn, postfix: H(nameof(BabySpawn_Postfix)));
 
                 var addTrait = AccessTools.Method(typeof(Actor), "addTrait", new[] { typeof(string), typeof(bool) });
                 if (addTrait != null) harmony.Patch(addTrait, postfix: H(nameof(AddTrait_Postfix)));
@@ -335,6 +340,16 @@ namespace WorldboxMP.Client.Mirror
         private static void CreateNewUnit_Postfix(Actor __result, string pStatsID)
         {
             MirrorManager.Instance?.OnKingSpawned(__result, pStatsID);
+        }
+
+        // Village births: createBabyActorFromData(ActorData, WorldTile, City). Broadcast the baby
+        // like any spawn so followers get city citizens (otherwise city population stays 0).
+        private static void BabySpawn_Postfix(Actor __result)
+        {
+            if (__result == null) return;
+            string assetId = null;
+            try { assetId = __result.asset?.id; } catch { }
+            MirrorManager.Instance?.OnKingSpawned(__result, assetId);
         }
 
         private static void MoveTo_Postfix(Actor __instance, WorldTile pTileTarget)
