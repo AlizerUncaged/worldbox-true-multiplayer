@@ -62,6 +62,7 @@ namespace WorldboxMP.Client
             if (Input.GetKeyDown(KeyCode.F10))
                 Dev.CameraDiag.Dump("F10");
             Dev.MoveDiag.Tick(Time.unscaledDeltaTime);
+            Dev.CityDiag.Tick(Time.unscaledDeltaTime);
 #endif
         }
 

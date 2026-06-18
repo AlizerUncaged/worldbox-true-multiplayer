@@ -327,6 +327,8 @@ namespace WorldboxMP.Client.Mirror
         }
 
         private int _objDbg;
+        private int _applyObjLog;
+        private int _kingObjLog;
         public void OnKingObject(object obj)
         {
             if (_objDbg < 16)
@@ -350,8 +352,20 @@ namespace WorldboxMP.Client.Mirror
                         try { data = r.GetData?.Invoke(obj, null); } catch (Exception ge) { ModLog.Warn($"[KING] {r.ObjType.Name}.getData: " + ge.Message); }
                         if (data == null) data = r.DataField?.GetValue(obj);   // fallback to live data field
                         if (data == null) { ModLog.Warn($"[KING] OnKingObject({r.ObjType.Name}): data null (getData+field both null) — not synced"); return; }
-                        Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg
-                        { Kind = r.Kind, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
+                        var json = JsonConvert.SerializeObject(data, JsonHelper.read_settings);
+                        // Heavy diag: for cities/kingdoms log what we actually serialize (name/leader/zones)
+                        // so we can confirm the king's side holds correct data before it leaves.
+                        if ((r.Kind == 2 || r.Kind == 1) && _kingObjLog < 12)
+                        {
+                            _kingObjLog++;
+                            string nm = "?"; long lid = -1; int zc = -1;
+                            try { nm = (string)AccessTools.PropertyGetter(r.DataType, "name")?.Invoke(data, null); } catch { }
+                            try { lid = Convert.ToInt64(AccessTools.PropertyGetter(r.DataType, "leaderID")?.Invoke(data, null) ?? -1L); } catch { }
+                            try { zc = (AccessTools.Field(r.DataType, "zones")?.GetValue(data) as System.Collections.ICollection)?.Count ?? -1; } catch { }
+                            bool jsonHasName = json.Contains("\"name\"");
+                            ModLog.Info($"[KING] OnKingObject SEND kind={r.Kind} name='{nm}' leaderID={lid} dataZones={zc} jsonLen={json.Length} jsonHasName={jsonHasName}");
+                        }
+                        Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg { Kind = r.Kind, Json = json }));
                         DbgObjSent++;
                         return;
                     }
@@ -676,6 +690,15 @@ namespace WorldboxMP.Client.Mirror
                             long id = Convert.ToInt64(r.IdGetter.Invoke(data, null));
                             var get = AccessTools.Method(mgr.GetType(), "get", new[] { typeof(long) });
                             var existing = id != 0 ? get?.Invoke(mgr, new object[] { id }) : null;
+                            if (_applyObjLog < 12)
+                            {
+                                _applyObjLog++;
+                                string nm = "?"; long lid = -1; int zc = -1;
+                                try { nm = (string)AccessTools.PropertyGetter(r.DataType, "name")?.Invoke(data, null); } catch { }
+                                try { lid = Convert.ToInt64(AccessTools.PropertyGetter(r.DataType, "leaderID")?.Invoke(data, null) ?? -1L); } catch { }
+                                try { zc = (AccessTools.Field(r.DataType, "zones")?.GetValue(data) as System.Collections.ICollection)?.Count ?? -1; } catch { }
+                                ModLog.Info($"[FOLLOWER] ApplyObject kind={m.Kind} id={id} name='{nm}' leaderID={lid} dataZones={zc} existing={(existing != null ? "UPDATE" : "CREATE")} jsonLen={m.Json?.Length}");
+                            }
                             if (existing != null) { r.ReloadInstance.Invoke(existing, new[] { data }); DbgObjRecv++; return; }
                         }
                         var load = AccessTools.Method(mgr.GetType(), "loadObject", new[] { r.DataType });
