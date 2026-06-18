@@ -340,7 +340,6 @@ namespace WorldboxMP.Client.Mirror
                         Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg
                         { Kind = r.Kind, Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings) }));
                         DbgObjSent++;
-                        ModLog.Info($"[KING] synced object {r.ObjType.Name} (kind={r.Kind})");
                         return;
                     }
                 if (!matched && _objDbg < 16) ModLog.Warn($"[KING] OnKingObject: NO registry match for {obj.GetType().Name}");
@@ -916,7 +915,29 @@ namespace WorldboxMP.Client.Mirror
             _longPollTimer += dt;
             if (_longPollTimer >= 0.5f) { _longPollTimer = 0f; SendLongPoll(); }
             _extraLongPollTimer += dt;
-            if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; SendActorResync(); }
+            if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; SendActorResync(); SendStructuralResync(); }
+        }
+
+        // extra_long_poll (1000ms): re-broadcast structural objects (buildings/cities/
+        // kingdoms) so followers create any they're MISSING — e.g. created before the king's
+        // room was Active, or whose create event was missed. loadObject no-ops for ones the
+        // follower already has, so this only fills gaps (it does not duplicate).
+        private void SendStructuralResync()
+        {
+            foreach (var r in _objReg)
+            {
+                if (r.Kind != 9 && r.Kind != 2 && r.Kind != 1) continue; // buildings, cities, kingdoms
+                try
+                {
+                    var mgr = r.Mgr();
+                    if (mgr == null) continue;
+                    var getList = AccessTools.Method(mgr.GetType(), "getSimpleList");
+                    var list = getList?.Invoke(mgr, null) as System.Collections.IEnumerable;
+                    if (list == null) continue;
+                    foreach (var o in list) OnKingObject(o);
+                }
+                catch (Exception e) { ModLog.Warn($"SendStructuralResync(kind={r.Kind}) failed: " + e.Message); }
+            }
         }
 
         // extra_long_poll (1000ms): force-override each actor's full state on followers, so
