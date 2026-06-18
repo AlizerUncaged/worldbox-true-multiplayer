@@ -101,7 +101,7 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _addStatusMethod; // Actor.addStatusEffect(string,float,bool) is internal
 
         // Registry of structural objects synced generically (Data + manager.loadObject).
-        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; }
+        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; public MethodInfo ReloadInstance; public FieldInfo IdField; }
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
         private bool _applyingStatus, _applyingEquip, _applyingObject, _applyingMember, _applyingCapture, _applyingKProp;
 
@@ -281,9 +281,14 @@ namespace WorldboxMP.Client.Mirror
                     // Cities/kingdoms have NO prepareForSave/getData — they populate their data
                     // (incl. City.data.zones = territory) in save(). Without this the synced
                     // CityData has empty zones -> no territory/banner on the follower.
-                    Save = AccessTools.Method(obj, "save") });
+                    Save = AccessTools.Method(obj, "save"),
+                    IdField = AccessTools.Field(data, "id") });
             Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
             Reg(2, typeof(City), typeof(CityData), () => World.world.cities);
+            // Cities expand and their name/stats change continuously, but we only get a create
+            // event once. On a re-send (long_poll override) update the EXISTING city in place via
+            // loadCity(data) — re-applies territory zones + name + stats — instead of skipping it.
+            _objReg.Find(r => r.Kind == 2).ReloadInstance = AccessTools.Method(typeof(City), "loadCity", new[] { typeof(CityData) });
             Reg(3, typeof(War), typeof(WarData), () => World.world.wars);
             Reg(4, typeof(Alliance), typeof(AllianceData), () => World.world.alliances);
             Reg(5, typeof(Plot), typeof(PlotData), () => World.world.plots);
@@ -661,6 +666,16 @@ namespace WorldboxMP.Client.Mirror
                         var data = JsonConvert.DeserializeObject(m.Json, r.DataType, JsonHelper.read_settings);
                         var mgr = r.Mgr();
                         if (mgr == null) return;
+                        // If this object already exists (re-sent on long_poll), update it in place
+                        // (e.g. City.loadCity re-applies grown territory + name + stats) instead of
+                        // loadObject, which no-ops for an existing id and would freeze it.
+                        if (r.ReloadInstance != null && r.IdField != null)
+                        {
+                            long id = Convert.ToInt64(r.IdField.GetValue(data));
+                            var get = AccessTools.Method(mgr.GetType(), "get", new[] { typeof(long) });
+                            var existing = id != 0 ? get?.Invoke(mgr, new object[] { id }) : null;
+                            if (existing != null) { r.ReloadInstance.Invoke(existing, new[] { data }); DbgObjRecv++; return; }
+                        }
                         var load = AccessTools.Method(mgr.GetType(), "loadObject", new[] { r.DataType });
                         load?.Invoke(mgr, new[] { data });
                         DbgObjRecv++;
@@ -971,8 +986,30 @@ namespace WorldboxMP.Client.Mirror
                 }
                 if (list.Count > 0)
                     Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Age, list));
+
+                // City/kingdom override (user-approved): cities expand and their name/stats change
+                // continuously, but we only get a create event once. Re-send each city/kingdom so
+                // the follower's territory + name + stats track the king (ApplyObject updates the
+                // existing one in place via loadCity). Cheap: a handful of cities, not per-tile.
+                RefreshStructural(typeof(CityManager), World.world?.cities);
+                RefreshStructural(typeof(KingdomManager), World.world?.kingdoms);
             }
             catch (Exception e) { ModLog.Warn("SendLongPoll failed: " + e.Message); }
+        }
+
+        // Re-broadcast every live object of a manager (cities/kingdoms) via OnKingObject, which
+        // save()s + serializes current state. Followers apply as an in-place update.
+        private void RefreshStructural(Type mgrType, object mgr)
+        {
+            if (mgr == null) return;
+            try
+            {
+                var getList = AccessTools.Method(mgrType, "getSimpleList");
+                var listObj = getList?.Invoke(mgr, null) as System.Collections.IEnumerable;
+                if (listObj == null) return;
+                foreach (var o in listObj) OnKingObject(o);
+            }
+            catch (Exception e) { ModLog.Warn($"RefreshStructural({mgrType.Name}) failed: " + e.Message); }
         }
 
         // ── Snapshots ───────────────────────────────────────────────────────
