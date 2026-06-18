@@ -196,22 +196,26 @@ namespace WorldboxMP.Client.Mirror
             // are LOCAL UI: do NOT mirror them (else clicking a village opens the dialogue on the
             // other client too) and do NOT suppress them locally (let the clicker see their own
             // window). Only world-changing powers get mirrored.
-            bool windowTool = false, terra = false, allowSel = false, showStats = false, mapModes = false;
-            string ptype = "?", dropId = "?", tileType = "?";
+            // Identify a PURE inspection/info tool (Village Info, Kingdom Info, Inspect Unit):
+            // opens a UI window AND has no world effect. unselect_when_window alone is too broad
+            // (spawns set it too!), so require: NOT a spawn (no actor_asset_id), NOT terraform,
+            // NO drop, NO tile placement. Those are local UI — run for the clicker, don't mirror.
+            bool windowTool = false, terra = false; string ptype = "?", dropId = null, tileType = null, actorAsset = null;
             try { windowTool = power.unselect_when_window; } catch { }
             try { terra = power.terraform; } catch { }
-            try { allowSel = power.allow_unit_selection; } catch { }
-            try { showStats = power.show_unit_stats_overview; } catch { }
-            try { mapModes = power.map_modes_switch; } catch { }
             try { ptype = power.type.ToString(); } catch { }
-            try { dropId = power.drop_id ?? "null"; } catch { }
-            try { tileType = power.tile_type ?? "null"; } catch { }
+            try { dropId = power.drop_id; } catch { }
+            try { tileType = power.tile_type; } catch { }
+            try { actorAsset = power.actor_asset_id; } catch { }
+            bool inspection = windowTool && string.IsNullOrEmpty(actorAsset) && !terra
+                              && string.IsNullOrEmpty(dropId) && string.IsNullOrEmpty(tileType)
+                              && ptype == "PowerSpecial";
             if (_godLog < 30)
             {
                 _godLog++;
-                ModLog.Info($"[GODPOWER] local id='{power.id}' type={ptype} unselWindow={windowTool} terraform={terra} allowSel={allowSel} showStats={showStats} mapModes={mapModes} drop={dropId} tile={tileType} -> {(windowTool ? "LOCAL-ONLY(skip mirror)" : "MIRROR")}");
+                ModLog.Info($"[GODPOWER] local id='{power.id}' type={ptype} unselWindow={windowTool} terraform={terra} actorAsset='{actorAsset}' drop='{dropId}' tile='{tileType}' -> {(inspection ? "LOCAL-ONLY(inspection,skip mirror)" : "MIRROR")}");
             }
-            if (windowTool) return true;
+            if (inspection) return true;
             Send(MirrorKind.GodPower, MirrorCodec.Write(new GodPowerMsg { PowerId = power.id, X = pos.x, Y = pos.y }));
             return IsKing;
         }
@@ -351,6 +355,7 @@ namespace WorldboxMP.Client.Mirror
         private int _applyObjLog;
         private int _kingObjLog;
         private int _godLog;
+        private int _cityJoinLog;
         public void OnKingObject(object obj)
         {
             if (_objDbg < 16)
@@ -927,6 +932,11 @@ namespace WorldboxMP.Client.Mirror
                     {
                         long cid = data.cityID;
                         var targetCity = cid > 0 ? World.world.cities.get(cid) : null;
+                        if (_cityJoinLog < 20)
+                        {
+                            _cityJoinLog++;
+                            ModLog.Info($"[FOLLOWER] resync actor id={a.id} data.cityID={cid} cityResolved={(targetCity != null)} alreadyIn={(a.city != null ? "yes" : "no")}");
+                        }
                         if (a.city != targetCity)
                         {
                             if (targetCity != null) a.joinCity(targetCity);
