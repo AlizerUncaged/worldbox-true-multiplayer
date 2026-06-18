@@ -180,6 +180,14 @@ namespace WorldboxMP.Client.Mirror
                 // crash on the partially-mirrored state and diverge). Keeps updateActors
                 // (movement interp) + updateBuildings (render, guarded) + updateMapLayers.
                 _mbUpdateBuildings = AccessTools.Method(typeof(MapBox), "updateBuildings", new[] { typeof(float) });
+                // MapBox.updateBuildings is a DEBUG-gated no-op (only runs buildings.update when
+                // DebugOption.SystemUpdateBuildings is set). The REAL building batch update — which
+                // schedules the updateVisibility job that sets each building's is_visible — lives
+                // in the part of updateSimulation we skip. Without it, high-res render
+                // (calculateVisibleBuildings -> fillVisibleObjects, filtered by is_visible) finds
+                // NO buildings -> they only appear in the low-res bit-scale chunk render. So call
+                // BuildingManager.update directly on the follower.
+                _buildingsUpdate = AccessTools.Method(typeof(BuildingManager), "update", new[] { typeof(float) });
                 _mbUpdateMapLayers = AccessTools.Method(typeof(MapBox), "updateMapLayers", new[] { typeof(float) });
                 _animUpdateTime    = AccessTools.Method(typeof(AnimationHelper), "updateTime", new[] { typeof(float), typeof(float) });
                 _enemiesClear      = AccessTools.Method(typeof(EnemiesFinder), "clear");
@@ -459,7 +467,7 @@ namespace WorldboxMP.Client.Mirror
         private static FieldInfo _buildingComponentsField;
         private static int _suppressedBuilds;
 
-        private static MethodInfo _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear;
+        private static MethodInfo _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear, _buildingsUpdate;
         private static MethodInfo _unitsCheckContainer, _unitsPrepMeta, _unitsCalcVisible, _unitsUpdate, _unitsCheckDestroy;
         private static FieldInfo _dropMgrField, _projMgrField;
         private static MethodInfo _dropUpdate, _projUpdate;
@@ -490,7 +498,11 @@ namespace WorldboxMP.Client.Mirror
                 Safe(_unitsUpdate, units, new object[] { pElapsed });          // movement interp + render + animation
                 Safe(_unitsCheckDestroy, units, null);                        // finalize corpses (death)
             }
-            Safe(_mbUpdateBuildings, __instance, new object[] { pElapsed });   // building render (guarded elsewhere)
+            // Real building batch update (sets is_visible via the updateVisibility job) so
+            // buildings render in HIGH-RES, not just the low-res chunk texture. updateBuildings
+            // itself is a debug-gated no-op, so call BuildingManager.update directly. Guarded
+            // crash sites (updateVisibility/components/shake/stats) protect malformed buildings.
+            try { var b = World.world?.buildings; if (b != null) Safe(_buildingsUpdate, b, new object[] { pElapsed }); } catch { }
             // Drops/projectiles intentionally NOT simulated on the follower: their explosions
             // have too many divergent side-effects (fire spread, effect/tentacle spawns, endless
             // building shake) beyond terraform. The nuke's visual fall is sacrificed; terrain,
