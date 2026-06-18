@@ -119,6 +119,11 @@ namespace WorldboxMP.Shared.Protocol
         /// the follower force-overrides traits/vitals (then recomputes derived stats). Sent
         /// on the extra_long_poll tier to correct drift the granular events miss.</summary>
         ActorResync = 26,
+
+        /// <summary>World-age state (MapStats: world_age_id, slot index, progress, duration,
+        /// speed multiplier, paused, configured slots). The follower's passive sim doesn't advance
+        /// the era_manager, so the king streams the authoritative age (long_poll + on change).</summary>
+        WorldAge = 27,
     }
 }
 

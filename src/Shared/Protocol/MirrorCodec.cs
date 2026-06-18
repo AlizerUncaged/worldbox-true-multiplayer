@@ -21,6 +21,7 @@ namespace WorldboxMP.Shared.Protocol
     }
     public struct EntityPos { public long KingId; public float X; public float Y; public float H; }
     public struct SimControlMsg { public bool Paused; public string SpeedId; }
+    public struct WorldAgeMsg { public string AgeId; public int SlotIndex; public float Progress; public float Duration; public float SpeedMult; public bool Paused; public string[] Slots; }
     public struct DeathMsg { public long KingId; }
     public struct FireMsg { public int X; public int Y; public bool On; }
     public struct TraitMsg { public long KingId; public string TraitId; public bool Add; }
@@ -308,6 +309,30 @@ namespace WorldboxMP.Shared.Protocol
         {
             var r = new NetDataReader(data);
             return new SimControlMsg { Paused = r.GetBool(), SpeedId = r.GetString() };
+        }
+
+        public static byte[] Write(WorldAgeMsg m)
+        {
+            var w = new NetDataWriter();
+            w.Put(m.AgeId ?? ""); w.Put(m.SlotIndex); w.Put(m.Progress); w.Put(m.Duration);
+            w.Put(m.SpeedMult); w.Put(m.Paused);
+            var slots = m.Slots ?? System.Array.Empty<string>();
+            w.Put(slots.Length);
+            foreach (var s in slots) w.Put(s ?? "");
+            return w.CopyData();
+        }
+        public static WorldAgeMsg ReadWorldAge(byte[] data)
+        {
+            var r = new NetDataReader(data);
+            var m = new WorldAgeMsg
+            {
+                AgeId = r.GetString(), SlotIndex = r.GetInt(), Progress = r.GetFloat(),
+                Duration = r.GetFloat(), SpeedMult = r.GetFloat(), Paused = r.GetBool()
+            };
+            int n = r.GetInt();
+            m.Slots = new string[n];
+            for (int i = 0; i < n; i++) m.Slots[i] = r.GetString();
+            return m;
         }
     }
 }

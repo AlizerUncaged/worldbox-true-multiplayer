@@ -54,6 +54,8 @@ namespace WorldboxMP.Client.Mirror
         }
         private static MethodInfo _checkSprite;
         private static MethodInfo _cacheTags;
+        private static FieldInfo _eraField;
+        private static MethodInfo _eraLoadAge;
         private static FieldInfo _statsField;        // Actor.stats (BaseStats)
         private static FieldInfo _statsDictField;    // BaseStats._stats_dict
         private static FieldInfo _statValueField;    // BaseStatsContainer.value
@@ -142,6 +144,8 @@ namespace WorldboxMP.Client.Mirror
             _die = AccessTools.Method(typeof(Actor), "die");
             _checkSprite = AccessTools.Method(typeof(Actor), "checkSpriteToRender");
             _cacheTags = AccessTools.Method(typeof(Subspecies), "cacheTags");
+            _eraField = AccessTools.Field(typeof(MapBox), "era_manager");
+            _eraLoadAge = AccessTools.Method(AccessTools.TypeByName("WorldAgeManager"), "loadAge");
             _setStatsDirty = AccessTools.Method(typeof(Actor), "setStatsDirty");
             _updateStats = AccessTools.Method(typeof(Actor), "updateStats");
             _actorDataField = AccessTools.Field(typeof(Actor), "data");
@@ -521,6 +525,9 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.ActorResync:
                     if (IsFollower) ApplyActorResync(MirrorCodec.ReadActorResync(msg.Payload));
+                    break;
+                case MirrorKind.WorldAge:
+                    if (IsFollower) ApplyWorldAge(MirrorCodec.ReadWorldAge(msg.Payload));
                     break;
                 case MirrorKind.Rename:
                     if (IsFollower) ApplyRename(MirrorCodec.ReadRename(msg.Payload));
@@ -1094,8 +1101,50 @@ namespace WorldboxMP.Client.Mirror
                 // existing one in place via loadCity). Cheap: a handful of cities, not per-tile.
                 RefreshStructural(World.world?.cities);
                 RefreshStructural(World.world?.kingdoms);
+                SendWorldAge();   // world-age state (era_manager isn't advanced on followers)
             }
             catch (Exception e) { ModLog.Warn("SendLongPoll failed: " + e.Message); }
+        }
+
+        // Stream the authoritative world-age state (MapStats). Followers don't advance the
+        // era_manager (passive sim), so the King pushes age id/slot/progress/slots each long_poll.
+        private void SendWorldAge()
+        {
+            try
+            {
+                var ms = _mapStatsField?.GetValue(World.world) as MapStats;
+                if (ms == null) return;
+                Send(MirrorKind.WorldAge, MirrorCodec.Write(new WorldAgeMsg
+                {
+                    AgeId = ms.world_age_id, SlotIndex = ms.world_age_slot_index, Progress = ms.current_age_progress,
+                    Duration = ms.current_world_ages_duration, SpeedMult = ms.world_ages_speed_multiplier,
+                    Paused = ms.is_world_ages_paused, Slots = ms.world_ages_slots
+                }));
+            }
+            catch (Exception e) { ModLog.Warn("SendWorldAge failed: " + e.Message); }
+        }
+
+        private int _ageLog;
+        private void ApplyWorldAge(WorldAgeMsg m)
+        {
+            try
+            {
+                var ms = _mapStatsField?.GetValue(World.world) as MapStats;
+                if (ms == null) return;
+                ms.world_age_id = m.AgeId;
+                ms.world_age_slot_index = m.SlotIndex;
+                ms.current_age_progress = m.Progress;
+                ms.current_world_ages_duration = m.Duration;
+                ms.world_ages_speed_multiplier = m.SpeedMult;
+                ms.is_world_ages_paused = m.Paused;
+                if (m.Slots != null && m.Slots.Length > 0) ms.world_ages_slots = m.Slots;
+                // Refresh the live era_manager so getCurrentAge()/effects reflect the synced
+                // world_age_id (loadAge() reads map_stats.world_age_id we just set).
+                var era = _eraField?.GetValue(World.world);
+                if (era != null) _eraLoadAge?.Invoke(era, null);
+                if (_ageLog < 6) { _ageLog++; ModLog.Info($"[FOLLOWER] world age <- '{m.AgeId}' slot={m.SlotIndex} prog={m.Progress:F2}"); }
+            }
+            catch (Exception e) { ModLog.Warn("ApplyWorldAge failed: " + e.Message); }
         }
 
         // Re-broadcast every live object of a manager (cities/kingdoms) via OnKingObject, which

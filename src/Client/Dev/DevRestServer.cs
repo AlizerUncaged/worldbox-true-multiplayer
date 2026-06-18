@@ -106,6 +106,16 @@ namespace WorldboxMP.Client.Dev
                 case "spawn": return Spawn(q);
                 case "speed": return Speed(q);
                 case "pause": try { Config.paused = GetI(q, "on", 1) != 0; } catch { } return Ok("paused " + Get(q, "on", "1"));
+                case "age":
+                    try
+                    {
+                        var ms = AccessTools.Field(typeof(MapBox), "map_stats")?.GetValue(World.world) as MapStats;
+                        if (ms != null) ms.world_age_id = Get(q, "id", "age_spawn");
+                        var era = AccessTools.Field(typeof(MapBox), "era_manager")?.GetValue(World.world);
+                        AccessTools.Method(era?.GetType(), "loadAge")?.Invoke(era, null);
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                    return Ok("age id " + Get(q, "id", "age_spawn"));
                 case "power": return Power(q);
                 default: return "{\"error\":\"unknown endpoint\"}";
             }
@@ -152,10 +162,12 @@ namespace WorldboxMP.Client.Dev
             bool paused = false; string speed = "?";
             try { paused = Config.paused; } catch { }
             try { speed = Config.time_scale_asset != null ? Config.time_scale_asset.id : "?"; } catch { }
+            // MapBox.map_stats is internal at runtime (publicized-DLL gotcha) — reach it by reflection.
+            string age = "?"; try { var ms = AccessTools.Field(typeof(MapBox), "map_stats")?.GetValue(World.world) as MapStats; if (ms != null) age = ms.world_age_id; } catch { }
             bool winActive = false; try { winActive = ScrollWindow.isWindowActive(); } catch { }
             int sapient = 0, mobs = 0;
             try { var l = World.world.units.getSimpleList(); for (int i = 0; i < l.Count; i++) { var a = l[i]; if (a == null || !a.isAlive()) continue; if (a.isSapient()) sapient++; else mobs++; } } catch { }
-            sb.Append($"\"actors\":{actors},\"sapient\":{sapient},\"mobs\":{mobs},\"paused\":{(paused ? "true" : "false")},\"speed\":\"{Esc(speed)}\",\"winActive\":{(winActive ? "true" : "false")},\"kingPaused\":{(MirrorManager.KingPaused ? "true" : "false")},");
+            sb.Append($"\"actors\":{actors},\"sapient\":{sapient},\"mobs\":{mobs},\"paused\":{(paused ? "true" : "false")},\"speed\":\"{Esc(speed)}\",\"winActive\":{(winActive ? "true" : "false")},\"kingPaused\":{(MirrorManager.KingPaused ? "true" : "false")},\"age\":\"{Esc(age)}\",");
             // cities (enumerate _hashset, not stale list)
             sb.Append("\"cities\":[");
             int cc = 0;
