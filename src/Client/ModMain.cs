@@ -33,7 +33,7 @@ namespace WorldboxMP.Client
             // Each step is isolated so a failure in one (e.g. a Harmony hook) can't
             // take down the whole mod — it logs and the rest still loads.
             var net = new NetClient();
-            Step("UI", () => { MultiplayerWindow.Ensure(); NetPump.Spawn(); UI.PlayerCursors.Spawn(); UI.PingHud.Spawn(); });
+            Step("UI", () => { MultiplayerWindow.Ensure(); NetPump.Spawn(); UI.PlayerCursors.Spawn(); UI.PingHud.Spawn(); UI.Model3D.Spawn(); });
             Step("mirroring", () =>
             {
                 var harmony = new Harmony("alizer.worldboxmp");

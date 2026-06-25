@@ -117,6 +117,8 @@ namespace WorldboxMP.Client.Dev
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                     return Ok("age id " + Get(q, "id", "age_spawn"));
                 case "power": return Power(q);
+                case "model3d": try { var inst = WorldboxMP.Client.UI.Model3D.Instance; if (inst == null) return "{\"error\":\"Model3D.Instance null (Spawn didn't run)\"}"; if (Get(q, "act", "show") == "hide") inst.Teardown(); else inst.Activate(); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; } return Ok("model3d " + Get(q, "act", "show"));
+                case "mpwindow": try { if (Get(q, "act", "open") == "open") WorldboxMP.Client.UI.MultiplayerWindow.Open(); else WorldboxMP.Client.UI.MultiplayerWindow.Prewarm(); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; } return Ok("mpwindow " + Get(q, "act", "open"));
                 default: return "{\"error\":\"unknown endpoint\"}";
             }
         }

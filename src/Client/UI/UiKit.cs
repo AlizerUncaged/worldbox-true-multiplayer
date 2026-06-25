@@ -108,8 +108,116 @@ namespace WorldboxMP.Client.UI
             return btn;
         }
 
-        /// <summary>A single-line text input with placeholder. Optionally a password field.</summary>
+        // Cached clone of WorldBox's native input-field element. The game styles its input fields
+        // entirely in prefabs (sprite/border/font/caret/padding are NOT set in code), so the only
+        // way to look native is to clone the real "NameInputElement" out of a window prefab.
+        private static GameObject _uiTemplateHolder;
+        private static GameObject _nativeInputTemplate;
+        private static bool _nativeInputTried;
+
+        private static Transform FindDeep(Transform t, string n)
+        {
+            if (t.name == n) return t;
+            foreach (Transform c in t) { var r = FindDeep(c, n); if (r != null) return r; }
+            return null;
+        }
+
+        private static GameObject GetNativeInputTemplate()
+        {
+            if (_nativeInputTemplate != null) return _nativeInputTemplate;
+            if (_nativeInputTried) return null;
+            _nativeInputTried = true;
+            try
+            {
+                var prefab = Resources.Load<GameObject>("windows/kingdom");
+                if (prefab == null) { ModLog.Warn("[UI] windows/kingdom prefab missing — using fallback input"); return null; }
+                // Instantiate under an INACTIVE holder so the window's Awake/Start never run.
+                _uiTemplateHolder = new GameObject("WBMP_UiTemplates");
+                _uiTemplateHolder.SetActive(false);
+                Object.DontDestroyOnLoad(_uiTemplateHolder);
+                var temp = Object.Instantiate(prefab, _uiTemplateHolder.transform);
+                var src = FindDeep(temp.transform, "NameInputElement");
+                if (src == null || src.GetComponent<NameInput>() == null)
+                {
+                    ModLog.Warn("[UI] NameInputElement not found in kingdom window — using fallback input");
+                    Object.Destroy(temp);
+                    return null;
+                }
+                _nativeInputTemplate = Object.Instantiate(src.gameObject, _uiTemplateHolder.transform);
+                _nativeInputTemplate.name = "WBMP_NativeInputTemplate";
+                Object.Destroy(temp);
+                ModLog.Info("[UI] native input template ready (cloned from kingdom window)");
+                return _nativeInputTemplate;
+            }
+            catch (System.Exception e) { ModLog.Warn("[UI] native input template failed: " + e.Message); return null; }
+        }
+
+        /// <summary>A single-line text input with placeholder, styled with WorldBox's native field
+        /// (cloned from the game's rename input) when available; falls back to a hand-built box.</summary>
         public static InputField MakeInput(string name, Transform parent, string placeholder,
+            bool password = false, int maxLen = 64)
+        {
+            var tmpl = GetNativeInputTemplate();
+            if (tmpl != null)
+            {
+                try
+                {
+                    var go = Object.Instantiate(tmpl, parent);
+                    go.name = name;
+                    go.SetActive(true);
+                    var ni = go.GetComponent<NameInput>();
+                    var input = ni != null ? ni.inputField : go.GetComponentInChildren<InputField>(true);
+                    if (input != null)
+                    {
+                        if (ni != null) { ni.can_be_empty = true; ni.is_onomastics = false; }
+                        input.onValueChanged.RemoveAllListeners();
+                        input.onEndEdit.RemoveAllListeners();
+                        input.text = "";
+                        input.characterLimit = maxLen;
+                        input.contentType = password ? InputField.ContentType.Password : InputField.ContentType.Standard;
+                        if (password) input.inputType = InputField.InputType.Password;
+                        if (input.textComponent != null) input.textComponent.color = Color.white;
+                        if (ni != null && ni.textField != null) ni.textField.color = Color.white;
+                        EnsurePlaceholder(input, placeholder);
+                        var le = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
+                        le.minHeight = 32f; le.preferredHeight = 32f; le.flexibleWidth = 1f;
+                        return input;
+                    }
+                    Object.Destroy(go);
+                }
+                catch (System.Exception e) { ModLog.Warn("[UI] native input clone failed: " + e.Message); }
+            }
+            return MakeInputFallback(name, parent, placeholder, password, maxLen);
+        }
+
+        // Native rename fields show the current name, not a placeholder — so make sure one exists.
+        private static void EnsurePlaceholder(InputField input, string placeholder)
+        {
+            var ph = input.placeholder as Text;
+            if (ph == null && input.textComponent != null)
+            {
+                var phGo = MakeRect(input.name + "_ph", input.textComponent.transform.parent);
+                var prt = phGo.GetComponent<RectTransform>();
+                var trt = input.textComponent.rectTransform;
+                prt.anchorMin = trt.anchorMin; prt.anchorMax = trt.anchorMax;
+                prt.offsetMin = trt.offsetMin; prt.offsetMax = trt.offsetMax;
+                ph = phGo.AddComponent<Text>();
+                OT.InitializeCommonText(ph);
+                ph.fontSize = input.textComponent.fontSize;
+                ph.alignment = input.textComponent.alignment;
+                input.placeholder = ph;
+            }
+            if (ph != null)
+            {
+                ph.text = placeholder;
+                ph.fontStyle = FontStyle.Italic;
+                ph.color = new Color(1f, 1f, 1f, 0.4f);
+                ph.supportRichText = false;
+            }
+        }
+
+        /// <summary>Hand-built dark input box — used only if the native clone is unavailable.</summary>
+        public static InputField MakeInputFallback(string name, Transform parent, string placeholder,
             bool password = false, int maxLen = 64)
         {
             var go = MakeRect(name, parent);

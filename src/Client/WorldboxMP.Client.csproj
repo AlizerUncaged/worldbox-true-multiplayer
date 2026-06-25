@@ -63,6 +63,22 @@
     <Reference Include="UnityEngine.TextRenderingModule">
       <HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private>
     </Reference>
+    <!-- 3D model rendering (GLTFUtility): AnimationClip, meshes, etc. -->
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(ManagedDir)\UnityEngine.AnimationModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>$(ManagedDir)\UnityEngine.AssetBundleModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UnityWebRequestModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestTextureModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UnityWebRequestTextureModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <!-- Networking + shared protocol (these DO get copied to output for deployment) -->
@@ -104,9 +120,12 @@
     <ItemGroup>
       <_DeployFiles Include="$(OutDir)*.dll" />
       <_DeployFiles Include="$(OutDir)mod.json" Condition="Exists('$(OutDir)mod.json')" />
+      <!-- 3D easter-egg models loaded at runtime from the mod folder. -->
+      <_DeployGlb Include="$(MSBuildProjectDirectory)\Assets3D\*.glb" />
     </ItemGroup>
     <MakeDir Directories="$(DeployDir)" />
     <Copy SourceFiles="@(_DeployFiles)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="@(_DeployGlb)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="true" />
     <Message Importance="high" Text="[WBMP] Deployed client -> $(DeployDir)" />
   </Target>
 

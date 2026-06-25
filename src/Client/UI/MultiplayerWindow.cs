@@ -247,7 +247,7 @@ namespace WorldboxMP.Client.UI
             foreach (var p in Net.Roster)
             {
                 var row = UiKit.MakeRow("p_" + p.Id4, _rosterContainer.transform, 4f);
-                string tag = ((RoomRole)p.Role) == RoomRole.King ? " \U0001F451" : ((RoomRole)p.Role) == RoomRole.Admin ? " ★" : "";
+                string tag = ((RoomRole)p.Role) == RoomRole.King ? " \U0001F451 God King" : ((RoomRole)p.Role) == RoomRole.Admin ? " ★ Admin" : "";
                 bool isMe = p.Id4 == Net.Id4;
                 UiKit.MakeText("n", row.transform, p.Username + tag + (isMe ? " (you)" : ""), 12);
                 if (Net.IsAdmin && !isMe)
