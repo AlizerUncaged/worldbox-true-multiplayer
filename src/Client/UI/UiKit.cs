@@ -88,6 +88,51 @@ namespace WorldboxMP.Client.UI
         public static Button MakeButton(string name, Transform parent, string label,
             System.Action onClick, Color? color = null, int fontSize = 13)
         {
+            var tmpl = GetNativeButtonTemplate();
+            if (tmpl != null)
+            {
+                try
+                {
+                    var go = Object.Instantiate(tmpl, parent);
+                    go.name = name;
+                    go.SetActive(true);
+                    var btn = go.GetComponent<Button>();
+                    var img = go.GetComponent<Image>();
+                    if (btn != null && img != null)
+                    {
+                        img.color = color ?? ButtonRed;       // tint the native pixel frame
+                        img.type = Image.Type.Sliced;         // keep the pixel border crisp when stretched wide
+                        btn.targetGraphic = img;
+                        btn.onClick.RemoveAllListeners();
+                        if (onClick != null) btn.onClick.AddListener(() => onClick());
+                        // Hide the native center icon; we use a text label instead.
+                        var icon = FindDeep(go.transform, "Icon");
+                        if (icon != null) icon.gameObject.SetActive(false);
+                        // Reuse an existing label if the prefab has one, else add our own.
+                        var txt = go.GetComponentInChildren<Text>(true);
+                        if (txt == null)
+                        {
+                            txt = MakeText(name + "_label", go.transform, label, fontSize, TextAnchor.MiddleCenter, FontStyle.Bold);
+                            var lrt = txt.rectTransform;
+                            lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
+                            lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
+                        }
+                        else { txt.gameObject.SetActive(true); txt.text = label; txt.fontSize = fontSize; txt.alignment = TextAnchor.MiddleCenter; txt.color = Color.white; }
+                        var le = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
+                        le.minHeight = 30f; le.preferredHeight = 30f; le.flexibleWidth = 1f;
+                        return btn;
+                    }
+                    Object.Destroy(go);
+                }
+                catch (System.Exception e) { ModLog.Warn("[UI] native button clone failed: " + e.Message); }
+            }
+            return MakeButtonFallback(name, parent, label, onClick, color, fontSize);
+        }
+
+        /// <summary>Hand-built flat button — used only if the native clone is unavailable.</summary>
+        public static Button MakeButtonFallback(string name, Transform parent, string label,
+            System.Action onClick, Color? color = null, int fontSize = 13)
+        {
             var go = MakeRect(name, parent);
             var img = go.AddComponent<Image>();
             img.color = color ?? ButtonRed;
@@ -113,13 +158,43 @@ namespace WorldboxMP.Client.UI
         // way to look native is to clone the real "NameInputElement" out of a window prefab.
         private static GameObject _uiTemplateHolder;
         private static GameObject _nativeInputTemplate;
-        private static bool _nativeInputTried;
+        private static GameObject _nativeButtonTemplate;
+        private static bool _nativeInputTried, _nativeButtonTried;
 
         private static Transform FindDeep(Transform t, string n)
         {
             if (t.name == n) return t;
             foreach (Transform c in t) { var r = FindDeep(c, n); if (r != null) return r; }
             return null;
+        }
+
+        // Shared inactive holder so cloned template subtrees never run their Awake/Start.
+        private static void EnsureTemplateHolder()
+        {
+            if (_uiTemplateHolder != null) return;
+            _uiTemplateHolder = new GameObject("WBMP_UiTemplates");
+            _uiTemplateHolder.SetActive(false);
+            Object.DontDestroyOnLoad(_uiTemplateHolder);
+        }
+
+        // WorldBox's pixel button: Resources "ui/PrefabWorldBoxButton" (a Button with a 9-sliced
+        // pixel frame Image + an "Icon" child). We clone the frame, hide the icon, add a text label.
+        private static GameObject GetNativeButtonTemplate()
+        {
+            if (_nativeButtonTemplate != null) return _nativeButtonTemplate;
+            if (_nativeButtonTried) return null;
+            _nativeButtonTried = true;
+            try
+            {
+                var prefab = Resources.Load<Button>("ui/PrefabWorldBoxButton");
+                if (prefab == null) { ModLog.Warn("[UI] PrefabWorldBoxButton missing — using fallback button"); return null; }
+                EnsureTemplateHolder();
+                _nativeButtonTemplate = Object.Instantiate(prefab.gameObject, _uiTemplateHolder.transform);
+                _nativeButtonTemplate.name = "WBMP_NativeButtonTemplate";
+                ModLog.Info("[UI] native button template ready (ui/PrefabWorldBoxButton)");
+                return _nativeButtonTemplate;
+            }
+            catch (System.Exception e) { ModLog.Warn("[UI] native button template failed: " + e.Message); return null; }
         }
 
         private static GameObject GetNativeInputTemplate()
@@ -132,9 +207,7 @@ namespace WorldboxMP.Client.UI
                 var prefab = Resources.Load<GameObject>("windows/kingdom");
                 if (prefab == null) { ModLog.Warn("[UI] windows/kingdom prefab missing — using fallback input"); return null; }
                 // Instantiate under an INACTIVE holder so the window's Awake/Start never run.
-                _uiTemplateHolder = new GameObject("WBMP_UiTemplates");
-                _uiTemplateHolder.SetActive(false);
-                Object.DontDestroyOnLoad(_uiTemplateHolder);
+                EnsureTemplateHolder();
                 var temp = Object.Instantiate(prefab, _uiTemplateHolder.transform);
                 var src = FindDeep(temp.transform, "NameInputElement");
                 if (src == null || src.GetComponent<NameInput>() == null)
