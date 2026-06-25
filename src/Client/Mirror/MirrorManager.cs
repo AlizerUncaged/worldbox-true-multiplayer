@@ -284,6 +284,7 @@ namespace WorldboxMP.Client.Mirror
         public void OnKingDeath(Actor actor)
         {
             if (!Active || !IsKing || actor == null) return;
+            if (DbgDeath < 12) { DbgDeath++; ModLog.Info($"[DEATH] king: actor {actor.id} died -> broadcast"); }
             Send(MirrorKind.Death, MirrorCodec.Write(new DeathMsg { KingId = actor.id }));
         }
 
@@ -679,12 +680,26 @@ namespace WorldboxMP.Client.Mirror
 
         private void ApplyDeath(DeathMsg m)
         {
+            // Minimal, robust corpse transition. setAlive(false) is public: it sets _alive=false +
+            // data.died_time, which switches the sprite to a corpse and makes the move replay skip
+            // it (so it stops walking) + lets it decay. We deliberately do NOT call the full private
+            // die() — its side effects (exitBuilding/equipment/kingdom.removeKing/city changes) can
+            // throw on the follower's mirrored state and leave the actor half-dead (the "walking
+            // corpse/blob"). We also keep the _kingToLocal mapping so the king's later corpse removal
+            // still resolves on the follower.
             var a = Resolve(m.KingId);
-            _kingToLocal.Remove(m.KingId);
-            if (a == null || _die == null) return;
-            try { _die.Invoke(a, new object[] { false, (AttackType)0, false, false }); }
-            catch (Exception e) { ModLog.Warn("ApplyDeath failed: " + e.Message); }
+            if (a == null) { if (DbgDeath < 6) { DbgDeath++; ModLog.Warn($"[DEATH] follower: actor {m.KingId} not resolved"); } return; }
+            try
+            {
+                bool was = a.isAlive();
+                ApplyingRemote = true;
+                if (a.isAlive()) a.setAlive(false);
+                ApplyingRemote = false;
+                if (DbgDeath < 12) { DbgDeath++; ModLog.Info($"[DEATH] follower: actor {m.KingId} was={was} now={a.isAlive()} tile={(a.current_tile != null)}"); }
+            }
+            catch (Exception e) { ApplyingRemote = false; ModLog.Warn("[DEATH] ApplyDeath failed: " + e.Message); }
         }
+        private static int DbgDeath;
 
         private void ApplyFire(FireMsg m)
         {
