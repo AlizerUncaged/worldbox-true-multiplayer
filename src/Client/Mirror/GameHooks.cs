@@ -169,6 +169,30 @@ namespace WorldboxMP.Client.Mirror
                 var ai = AccessTools.Method(typeof(Actor), "b6_updateAI");
                 if (ai != null) harmony.Patch(ai, prefix: H(nameof(SuppressAi_Prefix)));
 
+                // Projectiles (arrows/spells/boulders in flight). The king broadcasts each
+                // ProjectileManager.spawn; followers re-spawn it for the visual (their
+                // projectiles.update already runs in the passive sim below). On followers a
+                // projectile is VISUAL-ONLY: checkHitOnNearbyUnits is replaced (no local damage/
+                // deflect — hits arrive via the king's Health/Death sync) and its landing
+                // world-actions are already neutralized (Terraform_Prefix/Fire_Prefix).
+                var projSpawn = AccessTools.Method(typeof(ProjectileManager), "spawn");
+                if (projSpawn != null) harmony.Patch(projSpawn, postfix: H(nameof(ProjectileSpawn_Postfix)));
+                var projHit = AccessTools.Method(typeof(Projectile), "checkHitOnNearbyUnits");
+                if (projHit != null) harmony.Patch(projHit, prefix: H(nameof(ProjectileCheckHit_Prefix)));
+                // targetReached runs impact_actions/world_actions with a possibly-unresolvable
+                // initiator on the follower — swallow any NRE there so one bad projectile can't
+                // stall the whole projectiles.update for that frame.
+                var projReached = AccessTools.Method(typeof(Projectile), "targetReached");
+                if (projReached != null) harmony.Patch(projReached, finalizer: H(nameof(ProjectileTargetReached_Finalizer)));
+
+                // Slash effects — the swing/punch/kick/talk arcs. spawnSlash is the single funnel
+                // (spawnSlashPunch/Kick/… and weapon slashes all route through it). Followers
+                // never produce them (AI suppressed) so the king mirrors each one (batched/frame).
+                var slash = AccessTools.Method(typeof(Actor), "spawnSlash",
+                    new[] { typeof(Vector2), typeof(string), typeof(float), typeof(float), typeof(float), typeof(float?) });
+                if (slash != null) harmony.Patch(slash, postfix: H(nameof(SpawnSlash_Postfix)));
+                else ModLog.Warn("hook MISS: Actor.spawnSlash");
+
                 // Followers must NOT derive their own stats (their subspecies genome comes
                 // through incomplete, so updateStats yields stats["health"]≈0 → maxHealth=1,
                 // clamping synced health down). The king is authoritative for stats: it sends
@@ -530,6 +554,49 @@ namespace WorldboxMP.Client.Mirror
         {
             var m = MirrorManager.Instance;
             return m == null || !m.IsFollower;
+        }
+
+        // King: a slash effect played (attack swing/punch/kick/talk/yell) — queue it for
+        // this frame's batch so followers render the same arc on the mirrored actor.
+        private static void SpawnSlash_Postfix(Actor __instance, Vector2 pTowardsPosition,
+            string pSlashType, float pDistMod, float pTargetZ, float pStartZ, float? pAngle)
+        {
+            MirrorManager.Instance?.OnKingSlash(__instance, pTowardsPosition, pSlashType, pDistMod, pTargetZ, pStartZ, pAngle);
+        }
+
+        // King: a projectile launched — broadcast it so followers show the flight.
+        private static void ProjectileSpawn_Postfix(Projectile __result, BaseSimObject pInitiator,
+            BaseSimObject pTargetObject, string pAssetID, Vector3 pLaunchPosition, Vector3 pTargetPosition,
+            float pTargetZ, float pStartPosZ)
+        {
+            if (__result != null)
+                MirrorManager.Instance?.OnKingProjectile(pInitiator, pTargetObject, pAssetID,
+                    pLaunchPosition, pTargetPosition, pTargetZ, pStartPosZ);
+        }
+
+        // Follower: projectiles are visual-only — never compute local hits/deflects/blocks
+        // (that would double damage or even locally kill a mirrored actor; real hits arrive
+        // via the king's Health/Death sync). Airborne → keep flying; on ground → land (the
+        // Miss path plays fx + targetReached, whose world actions are prefix-blocked).
+        private static bool ProjectileCheckHit_Prefix(Projectile __instance, ref AttackDataResult __result)
+        {
+            var m = MirrorManager.Instance;
+            if (m == null || !m.IsFollower) return true;
+            __result = __instance.getCurrentHeight() <= 0f ? AttackDataResult.Miss : AttackDataResult.Continue;
+            return false;
+        }
+
+        private static int _projReachedErr;
+        private static Exception ProjectileTargetReached_Finalizer(Exception __exception)
+        {
+            if (__exception == null) return null;
+            var m = MirrorManager.Instance;
+            if (m != null && m.IsFollower)
+            {
+                if (_projReachedErr < 3) { _projReachedErr++; ModLog.Warn("[FOLLOWER] projectile targetReached swallowed: " + (__exception.InnerException ?? __exception).Message); }
+                return null;
+            }
+            return __exception;
         }
 
         // Skip local stat recompute on followers — stats come authoritatively from the king

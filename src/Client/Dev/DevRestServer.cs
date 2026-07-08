@@ -117,6 +117,11 @@ namespace WorldboxMP.Client.Dev
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                     return Ok("age id " + Get(q, "id", "age_spawn"));
                 case "power": return Power(q);
+                case "closewin":
+                    // A dialog pauses the local sim (effective pause = Config.paused || isWindowActive),
+                    // which silently freezes AI/tasks/combat on this instance — close everything.
+                    try { ScrollWindow.hideAllEvent(pWithAnimation: false); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                    return Ok("windows closed");
                 case "model3d": try { var inst = WorldboxMP.Client.UI.Model3D.Instance; if (inst == null) return "{\"error\":\"Model3D.Instance null (Spawn didn't run)\"}"; if (Get(q, "act", "show") == "hide") inst.Teardown(); else inst.Activate(); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; } return Ok("model3d " + Get(q, "act", "show"));
                 case "mpwindow": try { if (Get(q, "act", "open") == "open") WorldboxMP.Client.UI.MultiplayerWindow.Open(); else WorldboxMP.Client.UI.MultiplayerWindow.Prewarm(); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; } return Ok("mpwindow " + Get(q, "act", "open"));
                 default: return "{\"error\":\"unknown endpoint\"}";
@@ -170,6 +175,49 @@ namespace WorldboxMP.Client.Dev
             int sapient = 0, mobs = 0;
             try { var l = World.world.units.getSimpleList(); for (int i = 0; i < l.Count; i++) { var a = l[i]; if (a == null || !a.isAlive()) continue; if (a.isSapient()) sapient++; else mobs++; } } catch { }
             sb.Append($"\"actors\":{actors},\"sapient\":{sapient},\"mobs\":{mobs},\"paused\":{(paused ? "true" : "false")},\"speed\":\"{Esc(speed)}\",\"winActive\":{(winActive ? "true" : "false")},\"kingPaused\":{(MirrorManager.KingPaused ? "true" : "false")},\"age\":\"{Esc(age)}\",");
+            // projectiles in flight + action-visual histograms (data-level verify of the
+            // Anim/Slash/Projectile sync: compare these between king and follower).
+            int projCount = -1;
+            try { projCount = (AccessTools.Field(typeof(ProjectileManager), "list")?.GetValue(World.world.projectiles) as ICollection)?.Count ?? -1; } catch { }
+            var animCounts = new Dictionary<string, int>();
+            var taskCounts = new Dictionary<string, int>();
+            int jumping = 0;
+            try
+            {
+                var aiF = AccessTools.Field(typeof(Actor), "ai");
+                var actF = AccessTools.Field(typeof(AiSystemActor), "action");
+                var taskF = AccessTools.Field(typeof(AiSystemActor), "task");
+                var jumpF = AccessTools.Field(typeof(Actor), "timer_jump_animation");
+                var behType = AccessTools.TypeByName("ai.behaviours.BehaviourActionActor");
+                var faF = AccessTools.Field(behType, "force_animation");
+                var faIdF = AccessTools.Field(behType, "force_animation_id");
+                var l = World.world.units.getSimpleList();
+                for (int i = 0; i < l.Count; i++)
+                {
+                    var a = l[i]; if (a == null || !a.isAlive()) continue;
+                    var aiSys = aiF?.GetValue(a);
+                    if (aiSys == null) continue;
+                    try { if ((float)jumpF.GetValue(a) > 0f) jumping++; } catch { }
+                    try
+                    {
+                        if (taskF?.GetValue(aiSys) is BehaviourElementAI t && !string.IsNullOrEmpty(t.id))
+                        { taskCounts.TryGetValue(t.id, out var tn); taskCounts[t.id] = tn + 1; }
+                    }
+                    catch { }
+                    var act = actF?.GetValue(aiSys);
+                    if (act == null || !(bool)faF.GetValue(act)) continue;
+                    var aid = faIdF.GetValue(act) as string; if (string.IsNullOrEmpty(aid)) continue;
+                    animCounts.TryGetValue(aid, out var n0); animCounts[aid] = n0 + 1;
+                }
+            }
+            catch { }
+            sb.Append($"\"projectiles\":{projCount},\"jumping\":{jumping},\"anims\":{{");
+            int ac = 0;
+            foreach (var kv in animCounts) { if (ac++ > 0) sb.Append(","); sb.Append($"\"{Esc(kv.Key)}\":{kv.Value}"); }
+            sb.Append("},\"tasks\":{");
+            ac = 0;
+            foreach (var kv in taskCounts) { if (ac++ > 0) sb.Append(","); sb.Append($"\"{Esc(kv.Key)}\":{kv.Value}"); }
+            sb.Append("},");
             // cities (enumerate _hashset, not stale list)
             sb.Append("\"cities\":[");
             int cc = 0;

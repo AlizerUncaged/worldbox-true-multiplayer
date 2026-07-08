@@ -104,6 +104,23 @@ namespace WorldboxMP.Client.Mirror
         private static FieldInfo _itemDataField;    // Item.data is internal
         private static MethodInfo _addStatusMethod; // Actor.addStatusEffect(string,float,bool) is internal
 
+        // Forced-animation sync (attack/eat/sleep/mine/chop/build/cast). The renderer's
+        // calculateMainSprite reads ai.action.force_animation(_id); all of these are internal
+        // at runtime → reflection. Follower assigns a cached synthetic BehaviourActionActor
+        // (pure render data — its startExecute never runs, the follower AI is suppressed).
+        private static FieldInfo _actorAiField;        // Actor.ai (AiSystemActor)
+        private static FieldInfo _aiActionField;       // AiSystem`5.action (via AiSystemActor)
+        private static FieldInfo _aiTaskField;         // AiSystem`5.task (via AiSystemActor)
+        private static FieldInfo _forceAnimField;      // BehaviourActionActor.force_animation
+        private static FieldInfo _forceAnimIdField;    // BehaviourActionActor.force_animation_id
+        private static FieldInfo _animContainerField;  // Actor.animation_container
+        private static MethodInfo _checkAnimContainer; // Actor.checkAnimationContainer()
+        private static FieldInfo _animSpritesField;    // AnimationContainerUnit.sprites (Dictionary<string,Sprite>)
+        private static FieldInfo _jumpTimerField;      // Actor.timer_jump_animation (the lunge/hop)
+        private static MethodInfo _punchAnim;          // Actor.punchTargetAnimation (flip+tilt toward target)
+        private static object _taskLibrary;            // AssetManager.tasks_actor
+        private static MethodInfo _taskLibGet;         // AssetLibrary<BehaviourTaskActor>.get(string)
+
         // Registry of structural objects synced generically (Data + manager.loadObject).
         private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; public MethodInfo ReloadInstance; public MethodInfo IdGetter; }
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
@@ -121,6 +138,9 @@ namespace WorldboxMP.Client.Mirror
         // here and flushed once per frame (no polling/interval).
         private readonly List<MoveMsg> _pendingMoves = new List<MoveMsg>(128);
         private bool _applyingMove;
+        // Slash effects, same pattern: collected per frame, flushed with the moves.
+        private readonly List<SlashMsg> _pendingSlashes = new List<SlashMsg>(32);
+        private bool _applyingSlash;
         private float _snapshotTimer;
         private float _timeTimer;
         private float _shortPollTimer, _longPollTimer, _extraLongPollTimer;
@@ -161,6 +181,24 @@ namespace WorldboxMP.Client.Mirror
             _statsField = AccessTools.Field(typeof(Actor), "stats");
             _statsDictField = AccessTools.Field(typeof(BaseStats), "_stats_dict");
             _statValueField = AccessTools.Field(AccessTools.TypeByName("BaseStatsContainer"), "value");
+            _actorAiField = AccessTools.Field(typeof(Actor), "ai");
+            _aiActionField = AccessTools.Field(typeof(AiSystemActor), "action");   // walks up to AiSystem`5
+            _aiTaskField = AccessTools.Field(typeof(AiSystemActor), "task");
+            var behActionType = AccessTools.TypeByName("ai.behaviours.BehaviourActionActor");
+            _forceAnimField = AccessTools.Field(behActionType, "force_animation");
+            _forceAnimIdField = AccessTools.Field(behActionType, "force_animation_id");
+            _animContainerField = AccessTools.Field(typeof(Actor), "animation_container");
+            _checkAnimContainer = AccessTools.Method(typeof(Actor), "checkAnimationContainer");
+            _animSpritesField = AccessTools.Field(AccessTools.TypeByName("AnimationContainerUnit"), "sprites");
+            _jumpTimerField = AccessTools.Field(typeof(Actor), "timer_jump_animation");
+            _punchAnim = AccessTools.Method(typeof(Actor), "punchTargetAnimation");
+            try
+            {
+                _taskLibrary = AccessTools.Field(typeof(AssetManager), "tasks_actor")?.GetValue(null)
+                            ?? AccessTools.Property(typeof(AssetManager), "tasks_actor")?.GetValue(null);
+                if (_taskLibrary != null) _taskLibGet = AccessTools.Method(_taskLibrary.GetType(), "get", new[] { typeof(string) });
+            }
+            catch (Exception te) { ModLog.Warn("tasks_actor library lookup failed: " + te.Message); }
             BuildObjectRegistry();
             GameHooks.Apply(harmony);
 
@@ -181,7 +219,8 @@ namespace WorldboxMP.Client.Mirror
         {
             _kingToLocal.Clear();
             _pendingMoves.Clear();
-            ApplyingRemote = ApplyingSpawn = _applyingMove = false;
+            _lastAnim.Clear();
+            ApplyingRemote = ApplyingSpawn = _applyingMove = _applyingProjectile = false;
             _lastPaused = SafePaused();
             _snapshotTimer = 0f;
         }
@@ -192,6 +231,18 @@ namespace WorldboxMP.Client.Mirror
             if (!Active || !IsKing || _applyingMove || actor == null || target == null) return;
             _pendingMoves.Add(new MoveMsg { KingId = actor.id, X = target.pos.x, Y = target.pos.y });
             DbgMovesSent++;
+        }
+
+        /// <summary>King: a slash arc played (attack/punch/kick/talk) → queue for this frame's batch.</summary>
+        public void OnKingSlash(Actor actor, Vector2 towards, string slashType, float distMod, float targetZ, float startZ, float? angle)
+        {
+            if (!Active || !IsKing || _applyingSlash || ApplyingRemote || actor == null) return;
+            _pendingSlashes.Add(new SlashMsg
+            {
+                Id = actor.id, TX = towards.x, TY = towards.y, SlashType = slashType ?? "",
+                DistMod = distMod, TargetZ = targetZ, StartZ = startZ,
+                HasAngle = angle.HasValue, Angle = angle ?? 0f
+            });
         }
 
 
@@ -298,6 +349,26 @@ namespace WorldboxMP.Client.Mirror
         {
             if (!Active || !IsKing || InGodPower || ApplyingRemote || _applyingDisaster || tile == null || string.IsNullOrEmpty(dropId)) return;
             Send(MirrorKind.Disaster, MirrorCodec.Write(new DisasterMsg { X = tile.pos.x, Y = tile.pos.y, DropId = dropId }));
+        }
+
+        private bool _applyingProjectile;
+        private int _projSendLog, _projApplyLog, _projErr;
+        /// <summary>King: a projectile launched (ProjectileManager.spawn) → mirror the launch args.
+        /// God-power projectiles are skipped (the power itself replays via clickedFinal on followers,
+        /// spawning its own) — same guard as drops.</summary>
+        public void OnKingProjectile(BaseSimObject initiator, BaseSimObject target, string assetId,
+            Vector3 launch, Vector3 targetPos, float targetZ, float startZ)
+        {
+            if (!Active || !IsKing || InGodPower || ApplyingRemote || _applyingProjectile || string.IsNullOrEmpty(assetId)) return;
+            Send(MirrorKind.Projectile, MirrorCodec.Write(new ProjectileMsg
+            {
+                InitiatorId = initiator != null ? initiator.id : 0,
+                TargetId = target != null ? target.id : 0,
+                AssetId = assetId,
+                LX = launch.x, LY = launch.y, TX = targetPos.x, TY = targetPos.y,
+                TargetZ = targetZ, StartZ = startZ
+            }));
+            if (_projSendLog < 12) { _projSendLog++; ModLog.Info($"[PROJ] king: broadcast '{assetId}' ({launch.x:F0},{launch.y:F0})->({targetPos.x:F0},{targetPos.y:F0})"); }
         }
 
         public void OnKingTrait(Actor actor, string traitId, bool add)
@@ -566,6 +637,15 @@ namespace WorldboxMP.Client.Mirror
                     break;
                 case MirrorKind.Disaster:
                     if (IsFollower) ApplyDisaster(MirrorCodec.ReadDisaster(msg.Payload));
+                    break;
+                case MirrorKind.Anim:
+                    if (IsFollower) ApplyAnimBatch(MirrorCodec.ReadAnimBatch(msg.Payload));
+                    break;
+                case MirrorKind.Projectile:
+                    if (IsFollower) ApplyProjectile(MirrorCodec.ReadProjectile(msg.Payload));
+                    break;
+                case MirrorKind.Slash:
+                    if (IsFollower) ApplySlashBatch(MirrorCodec.ReadSlashBatch(msg.Payload));
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -869,6 +949,154 @@ namespace WorldboxMP.Client.Mirror
             finally { _applyingDisaster = false; }
         }
 
+        // Follower: re-spawn the king's projectile for the visual flight (the passive sim's
+        // projectiles.update flies + renders it; checkHitOnNearbyUnits is neutralized so it
+        // can't damage anything locally). A non-null kingdom is REQUIRED: the manager's
+        // updateProjectiles uses projectile.kingdom as a Dictionary key every tick, and
+        // checkCollision dereferences kingdom.asset — a null kingdom would exception-storm.
+        private void ApplyProjectile(ProjectileMsg m)
+        {
+            if (string.IsNullOrEmpty(m.AssetId)) return;
+            try
+            {
+                BaseSimObject init = m.InitiatorId != 0 ? (BaseSimObject)Resolve(m.InitiatorId) : null;
+                if (init == null && m.InitiatorId != 0)
+                    try { init = World.world.buildings.get(m.InitiatorId); } catch { }
+                BaseSimObject targ = m.TargetId != 0 ? (BaseSimObject)Resolve(m.TargetId) : null;
+                if (targ == null && m.TargetId != 0)
+                    try { targ = World.world.buildings.get(m.TargetId); } catch { }
+                Kingdom k = init != null ? init.kingdom : null;
+                if (k == null && targ != null) k = targ.kingdom;
+                if (k == null) k = AnyKingdom();
+                if (k == null) { if (_projErr < 4) { _projErr++; ModLog.Warn("[PROJ] follower: no kingdom to own projectile — skipped"); } return; }
+                _applyingProjectile = true;
+                World.world.projectiles.spawn(init, targ, m.AssetId,
+                    new Vector3(m.LX, m.LY, 0f), new Vector3(m.TX, m.TY, 0f), m.TargetZ, m.StartZ, null, k);
+                if (_projApplyLog < 12) { _projApplyLog++; ModLog.Info($"[PROJ] follower: spawned '{m.AssetId}' ({m.LX:F0},{m.LY:F0})->({m.TX:F0},{m.TY:F0}) init={(init != null)} targ={(targ != null)}"); }
+            }
+            catch (Exception e) { if (_projErr < 4) { _projErr++; ModLog.Warn("[PROJ] ApplyProjectile failed: " + (e.InnerException ?? e).Message); } }
+            finally { _applyingProjectile = false; }
+        }
+
+        private static Kingdom AnyKingdom()
+        {
+            try
+            {
+                if (World.world?.kingdoms is System.Collections.IEnumerable ks)
+                    foreach (var k in ks) if (k is Kingdom kk) return kk;
+            }
+            catch { }
+            return null;
+        }
+
+        private readonly Dictionary<string, object> _animActionCache = new Dictionary<string, object>();
+        private readonly Dictionary<string, object> _taskCache = new Dictionary<string, object>();
+        private int _animLog, _animErr, _slashLog, _slashErr;
+        // Follower: apply the king's action-visual state. All pure render data — the follower's
+        // AI is suppressed, so nothing here executes logic:
+        //  • ai.task  → the real shared task asset; hasTask()+force_hand_tool makes the
+        //    hand-tool overlay (pickaxe/axe/hammer…) render = the visible job animation.
+        //  • ai.action → a cached synthetic action carrying force_animation(_id) (e.g. burrow).
+        //  • Jump > 0  → set timer_jump_animation (one hop; decays in updateParallelChecks).
+        private void ApplyAnimBatch(List<AnimMsg> list)
+        {
+            if (list == null || _actorAiField == null) return;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var m = list[i];
+                var a = Resolve(m.Id);
+                if (a == null) continue;
+                try
+                {
+                    var ai = _actorAiField.GetValue(a);
+                    if (ai == null) continue;
+
+                    // task (hand tool + unit-window text)
+                    if (_aiTaskField != null)
+                    {
+                        if (string.IsNullOrEmpty(m.TaskId)) _aiTaskField.SetValue(ai, null);
+                        else if (a.isAlive())
+                        {
+                            if (!_taskCache.TryGetValue(m.TaskId, out var task))
+                            {
+                                task = _taskLibGet?.Invoke(_taskLibrary, new object[] { m.TaskId });
+                                _taskCache[m.TaskId] = task;   // cache nulls too (unknown ids)
+                            }
+                            if (task != null) _aiTaskField.SetValue(ai, task);
+                        }
+                    }
+
+                    // forced animation (rare, e.g. burrow)
+                    if (_aiActionField != null)
+                    {
+                        if (string.IsNullOrEmpty(m.AnimId)) _aiActionField.SetValue(ai, null);
+                        else if (a.isAlive() && HasAnimSprite(a, m.AnimId))
+                        {
+                            if (!_animActionCache.TryGetValue(m.AnimId, out var act))
+                            {
+                                act = Activator.CreateInstance(AccessTools.TypeByName("ai.behaviours.BehaviourActionActor"));
+                                _forceAnimField?.SetValue(act, true);
+                                _forceAnimIdField?.SetValue(act, m.AnimId);
+                                _animActionCache[m.AnimId] = act;
+                            }
+                            _aiActionField.SetValue(ai, act);
+                        }
+                    }
+
+                    // lunge/hop
+                    if (m.Jump > 0f && a.isAlive()) _jumpTimerField?.SetValue(a, m.Jump);
+
+                    if (_animLog < 12) { _animLog++; ModLog.Info($"[ANIM] follower: actor {m.Id} task='{m.TaskId}' anim='{m.AnimId}' jump={m.Jump:F2}"); }
+                }
+                catch (Exception e) { if (_animErr < 4) { _animErr++; ModLog.Warn("[ANIM] apply failed: " + (e.InnerException ?? e).Message); } }
+            }
+        }
+
+        // Only force animations this actor's sprite container actually has —
+        // calculateMainSprite indexes sprites[id] directly (KeyNotFound = render storm).
+        private bool HasAnimSprite(Actor a, string animId)
+        {
+            try
+            {
+                var cont = _animContainerField?.GetValue(a);
+                if (cont == null)
+                {
+                    try { _checkAnimContainer?.Invoke(a, null); } catch { }
+                    cont = _animContainerField?.GetValue(a);
+                }
+                var sprites = cont != null ? _animSpritesField?.GetValue(cont) as System.Collections.IDictionary : null;
+                return sprites != null && sprites.Contains(animId);
+            }
+            catch { return false; }
+        }
+
+        // Follower: replay a slash arc (attack swing/punch/kick/talk) on the mirrored actor,
+        // plus the flip+tilt toward the target so the attacker visibly faces its victim.
+        private void ApplySlashBatch(List<SlashMsg> list)
+        {
+            if (list == null) return;
+            _applyingSlash = true;
+            try
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var m = list[i];
+                    var a = Resolve(m.Id);
+                    if (a == null || !a.isAlive()) continue;
+                    try
+                    {
+                        var towards = new Vector2(m.TX, m.TY);
+                        a.spawnSlash(towards, string.IsNullOrEmpty(m.SlashType) ? null : m.SlashType,
+                            m.DistMod, m.TargetZ, m.StartZ, m.HasAngle ? (float?)m.Angle : null);
+                        try { _punchAnim?.Invoke(a, new object[] { (Vector3)towards, true, false, 40f }); } catch { }
+                        if (_slashLog < 12) { _slashLog++; ModLog.Info($"[SLASH] follower: actor {m.Id} '{m.SlashType}' -> ({m.TX:F0},{m.TY:F0})"); }
+                    }
+                    catch (Exception e) { if (_slashErr < 4) { _slashErr++; ModLog.Warn("[SLASH] apply failed: " + (e.InnerException ?? e).Message); } }
+                }
+            }
+            finally { _applyingSlash = false; }
+        }
+
         private void ApplyWarEnd(WarEndMsg m)
         {
             try
@@ -1045,6 +1273,13 @@ namespace WorldboxMP.Client.Mirror
                 _pendingMoves.Clear();
             }
 
+            // Flush this frame's slash effects (attack swings etc.).
+            if (_pendingSlashes.Count > 0)
+            {
+                Send(MirrorKind.Slash, MirrorCodec.WriteSlashBatch(_pendingSlashes));
+                _pendingSlashes.Clear();
+            }
+
             // Low-rate authoritative clock correction (single scalar — not position polling)
             // so the year/season/day stays locked across clients without drift.
             _timeTimer += dt;
@@ -1062,11 +1297,73 @@ namespace WorldboxMP.Client.Mirror
 
             // ── Poll tiers (continuous/Update()-based values we don't send per-frame) ──
             _shortPollTimer += dt;
-            if (_shortPollTimer >= 0.1f) { _shortPollTimer = 0f; /* reserved: stats that truly need 100ms */ }
+            if (_shortPollTimer >= 0.1f) { _shortPollTimer = 0f; SendAnimPoll(); }   // forced-animation diffs
             _longPollTimer += dt;
             if (_longPollTimer >= 0.5f) { _longPollTimer = 0f; SendLongPoll(); }
             _extraLongPollTimer += dt;
             if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; SendActorResync(); }   // age/stats are continuous; structural is event-based
+        }
+
+        // short_poll (100ms): action-visual diff scan. Followers suppress AI, so the king
+        // streams what each actor is visibly DOING:
+        //  • task id  — drives the hand-tool overlay (pickaxe/axe/hammer/basket…), which IS
+        //    the visible mine/chop/build/farm animation, plus the unit-window task text.
+        //  • forced animation id — rare (e.g. "burrow"), but it's the one true sprite override.
+        //  • jump — timer_jump_animation edge (combat lunge / task bounce); one-shot value,
+        //    decays naturally on the follower (updateParallelChecks runs in the passive sim).
+        // Only CHANGES are sent, so steady state costs nothing.
+        private struct AnimState { public string Anim; public string Task; public bool Jumping; }
+        private readonly Dictionary<long, AnimState> _lastAnim = new Dictionary<long, AnimState>();
+        private readonly HashSet<long> _animSeen = new HashSet<long>();
+        private readonly List<AnimMsg> _animOut = new List<AnimMsg>(64);
+        private readonly List<long> _animPrune = new List<long>();
+        private void SendAnimPoll()
+        {
+            if (_actorAiField == null) return;
+            try
+            {
+                var units = World.world?.units?.getSimpleList();
+                if (units == null) return;
+                _animOut.Clear(); _animSeen.Clear();
+                for (int i = 0; i < units.Count; i++)
+                {
+                    var a = units[i];
+                    if (a == null || !a.isAlive()) continue;
+                    string anim = "", task = "";
+                    float jump = 0f;
+                    try
+                    {
+                        var aiSys = _actorAiField.GetValue(a);
+                        if (aiSys != null)
+                        {
+                            var act = _aiActionField?.GetValue(aiSys);
+                            if (act != null && _forceAnimField != null && (bool)_forceAnimField.GetValue(act))
+                                anim = _forceAnimIdField.GetValue(act) as string ?? "";
+                            if (_aiTaskField?.GetValue(aiSys) is BehaviourElementAI t) task = t.id ?? "";
+                        }
+                        if (_jumpTimerField != null) jump = (float)_jumpTimerField.GetValue(a);
+                    }
+                    catch { }
+                    bool jumping = jump > 0f;
+                    _animSeen.Add(a.id);
+                    _lastAnim.TryGetValue(a.id, out var prev);
+                    bool jumpEdge = jumping && !prev.Jumping;   // only the rising edge is sent
+                    if (anim != (prev.Anim ?? "") || task != (prev.Task ?? "") || jumping != prev.Jumping)
+                    {
+                        _lastAnim[a.id] = new AnimState { Anim = anim, Task = task, Jumping = jumping };
+                        _animOut.Add(new AnimMsg { Id = a.id, AnimId = anim, TaskId = task, Jump = jumpEdge ? jump : 0f });
+                    }
+                }
+                // prune dead/removed actors so the diff dict doesn't grow forever
+                if (_lastAnim.Count > _animSeen.Count)
+                {
+                    _animPrune.Clear();
+                    foreach (var id in _lastAnim.Keys) if (!_animSeen.Contains(id)) _animPrune.Add(id);
+                    for (int i = 0; i < _animPrune.Count; i++) _lastAnim.Remove(_animPrune[i]);
+                }
+                if (_animOut.Count > 0) Send(MirrorKind.Anim, MirrorCodec.WriteAnimBatch(_animOut));
+            }
+            catch (Exception e) { ModLog.Warn("SendAnimPoll failed: " + e.Message); }
         }
 
         // extra_long_poll (1000ms): force-override each actor's full state on followers, so

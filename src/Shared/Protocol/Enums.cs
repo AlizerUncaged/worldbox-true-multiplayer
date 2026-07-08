@@ -124,6 +124,24 @@ namespace WorldboxMP.Shared.Protocol
         /// speed multiplier, paused, configured slots). The follower's passive sim doesn't advance
         /// the era_manager, so the king streams the authoritative age (long_poll + on change).</summary>
         WorldAge = 27,
+
+        /// <summary>Per-actor action-visual state, diff-scanned on the short_poll (100ms).
+        /// Followers suppress AI, so none of these ever change there — the king streams them:
+        ///  • AnimId — ai.action.force_animation_id (rare; e.g. "burrow").
+        ///  • TaskId — ai.task.id; drives the hand-tool overlay (pickaxe/axe/hammer/basket…)
+        ///    that IS the visible mine/chop/build/farm animation, and the unit-window task text.
+        ///  • Jump — timer_jump_animation; the lunge/hop used by combat and task bounces
+        ///    (decays naturally in updateParallelChecks, which followers run).</summary>
+        Anim = 28,
+
+        /// <summary>A projectile launched (ProjectileManager.spawn): arrows/spells/boulders in
+        /// flight. Followers re-spawn it visually (their projectiles.update already runs in the
+        /// passive sim); its damage/terraform is neutralized there — hits arrive via Health/Death.</summary>
+        Projectile = 29,
+
+        /// <summary>Slash effects (Actor.spawnSlash): the swing/punch/kick/talk/yell arcs that
+        /// make combat and interactions visibly happen. Batched per frame like Move.</summary>
+        Slash = 30,
     }
 }
 

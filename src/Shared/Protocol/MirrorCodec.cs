@@ -46,6 +46,26 @@ namespace WorldboxMP.Shared.Protocol
     public struct KingdomPropMsg { public long KingdomId; public byte Prop; public long Value; }
     public struct WarEndMsg { public long WarId; public byte Winner; }
     public struct DisasterMsg { public int X; public int Y; public string DropId; }
+    /// <summary>One actor's action-visual change (MirrorKind.Anim). Empty string = cleared.
+    /// Jump &gt; 0 = set timer_jump_animation to that value (one-shot hop; 0 = no change).</summary>
+    public struct AnimMsg { public long Id; public string AnimId; public string TaskId; public float Jump; }
+    /// <summary>One slash effect (MirrorKind.Slash) — mirrors Actor.spawnSlash args.
+    /// SlashType "" = null (weapon slash). HasAngle gates the nullable pAngle.</summary>
+    public struct SlashMsg
+    {
+        public long Id; public float TX; public float TY; public string SlashType;
+        public float DistMod; public float TargetZ; public float StartZ;
+        public bool HasAngle; public float Angle;
+    }
+    /// <summary>A projectile launch (MirrorKind.Projectile) — mirrors ProjectileManager.spawn args.
+    /// Initiator/Target are BaseSimObject ids (actor or building; 0 = none).</summary>
+    public struct ProjectileMsg
+    {
+        public long InitiatorId; public long TargetId; public string AssetId;
+        public float LX; public float LY;       // launch position
+        public float TX; public float TY;       // target position
+        public float TargetZ; public float StartZ;
+    }
 
     /// <summary>Encodes/decodes the kind-specific payloads of a <see cref="MirrorMessage"/>.</summary>
     public static class MirrorCodec
@@ -165,6 +185,68 @@ namespace WorldboxMP.Shared.Protocol
         public static DisasterMsg ReadDisaster(byte[] data)
         {
             var r = new NetDataReader(data); return new DisasterMsg { X = r.GetInt(), Y = r.GetInt(), DropId = r.GetString() };
+        }
+
+        // Action-visual batch (short_poll diff: only actors whose anim/task/jump changed).
+        public static byte[] WriteAnimBatch(List<AnimMsg> list)
+        {
+            var w = new NetDataWriter();
+            w.Put((ushort)list.Count);
+            foreach (var m in list) { w.Put(m.Id); w.Put(m.AnimId ?? ""); w.Put(m.TaskId ?? ""); w.Put(m.Jump); }
+            return w.CopyData();
+        }
+        public static List<AnimMsg> ReadAnimBatch(byte[] data)
+        {
+            var r = new NetDataReader(data);
+            int n = r.GetUShort();
+            var list = new List<AnimMsg>(n);
+            for (int i = 0; i < n; i++) list.Add(new AnimMsg { Id = r.GetLong(), AnimId = r.GetString(), TaskId = r.GetString(), Jump = r.GetFloat() });
+            return list;
+        }
+
+        // Slash batch (per-frame flush, like WriteMoveBatch).
+        public static byte[] WriteSlashBatch(List<SlashMsg> list)
+        {
+            var w = new NetDataWriter();
+            w.Put((ushort)list.Count);
+            foreach (var m in list)
+            {
+                w.Put(m.Id); w.Put(m.TX); w.Put(m.TY); w.Put(m.SlashType ?? "");
+                w.Put(m.DistMod); w.Put(m.TargetZ); w.Put(m.StartZ); w.Put(m.HasAngle); w.Put(m.Angle);
+            }
+            return w.CopyData();
+        }
+        public static List<SlashMsg> ReadSlashBatch(byte[] data)
+        {
+            var r = new NetDataReader(data);
+            int n = r.GetUShort();
+            var list = new List<SlashMsg>(n);
+            for (int i = 0; i < n; i++)
+                list.Add(new SlashMsg
+                {
+                    Id = r.GetLong(), TX = r.GetFloat(), TY = r.GetFloat(), SlashType = r.GetString(),
+                    DistMod = r.GetFloat(), TargetZ = r.GetFloat(), StartZ = r.GetFloat(),
+                    HasAngle = r.GetBool(), Angle = r.GetFloat()
+                });
+            return list;
+        }
+
+        public static byte[] Write(ProjectileMsg m)
+        {
+            var w = new NetDataWriter();
+            w.Put(m.InitiatorId); w.Put(m.TargetId); w.Put(m.AssetId ?? "");
+            w.Put(m.LX); w.Put(m.LY); w.Put(m.TX); w.Put(m.TY); w.Put(m.TargetZ); w.Put(m.StartZ);
+            return w.CopyData();
+        }
+        public static ProjectileMsg ReadProjectile(byte[] data)
+        {
+            var r = new NetDataReader(data);
+            return new ProjectileMsg
+            {
+                InitiatorId = r.GetLong(), TargetId = r.GetLong(), AssetId = r.GetString(),
+                LX = r.GetFloat(), LY = r.GetFloat(), TX = r.GetFloat(), TY = r.GetFloat(),
+                TargetZ = r.GetFloat(), StartZ = r.GetFloat()
+            };
         }
 
         public static byte[] Write(ObjectRemoveMsg m)
