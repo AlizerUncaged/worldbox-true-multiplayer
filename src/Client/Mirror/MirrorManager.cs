@@ -494,6 +494,12 @@ namespace WorldboxMP.Client.Mirror
                     // field - AccessTools.Field would return null. Use the property getter.
                     IdGetter = AccessTools.PropertyGetter(data, "id") });
             Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
+            // Kingdoms have no loadKingdom(data); adopt fresh data via the base
+            // CoreSystemObject.setData (plain swap) so 500ms re-sends keep kingID/capital/
+            // name current - LinkObjectRefs then re-links from the NEW data. (Without this,
+            // load2 kept re-linking the STALE creation-time kingID and fought the live
+            // KingdomProp updates: crown markers froze on dead/old kings.)
+            _objReg.Find(r => r.Kind == 1).ReloadInstance = AccessTools.Method(typeof(Kingdom), "setData", new[] { typeof(KingdomData) });
             Reg(2, typeof(City), typeof(CityData), () => World.world.cities);
             // Cities expand and their name/stats change continuously, but we only get a create
             // event once. On a re-send (long_poll override) update the EXISTING city in place via
@@ -879,7 +885,15 @@ namespace WorldboxMP.Client.Mirror
             {
                 bool was = a.isAlive();
                 ApplyingRemote = true;
-                if (a.isAlive()) a.setAlive(false);
+                if (a.isAlive())
+                {
+                    // Feed the battle markers (sword icons + death counters on zoom-out).
+                    // On the king this happens in Actor.checkDeath -> addUnitKilled; the
+                    // follower's die() is blocked, so register the mirrored death here.
+                    // BattleKeeperManager.update already runs in the render loop.
+                    try { if (a.current_tile != null) BattleKeeperManager.addUnitKilled(a); } catch { }
+                    a.setAlive(false);
+                }
                 ApplyingRemote = false;
                 if (DbgDeath < 12) { DbgDeath++; ModLog.Info($"[DEATH] follower: actor {m.KingId} was={was} now={a.isAlive()} tile={(a.current_tile != null)}"); }
             }
@@ -894,8 +908,11 @@ namespace WorldboxMP.Client.Mirror
             ApplyingRemote = true;   // let this synced fire through the Fire_Prefix block
             try
             {
-                if (m.On) WorldBehaviourActionFire.addFire(tile);
-                else WorldBehaviourActionFire.removeFire(tile);
+                // setFireData is the game's real state setter: it writes the authoritative
+                // tile_manager.fires[] flag AND routes to addFire/removeFire (render set).
+                // Calling addFire directly left the flag false, so the fire layer drew
+                // NOTHING for the dirty tile - fires were invisible on followers.
+                tile.setFireData(m.On);
             }
             catch (Exception e) { ModLog.Warn("ApplyFire failed: " + e.Message); }
             finally { ApplyingRemote = false; }
@@ -983,14 +1000,48 @@ namespace WorldboxMP.Client.Mirror
         // and the map's crown/leader-face icons never draw. Resolve the live references
         // the same way the loader does: Kingdom.load2() links capital + king (and sets the
         // King profession); City.loadLeader() links the leader from data.leaderID.
+        // ONLY when the live ref is actually stale: load2/setLeader run setProfession ->
+        // clearGraphicsFully, and doing that every 500ms re-send thrashes the actor.
         private int _linkErr;
+        private static FieldInfo _kingdomDataF, _cityDataF;
+        private static MethodInfo _kingdomKingIdGetter, _cityLeaderIdGetter;   // kingID/leaderID are PROPERTIES (default -1)
         private void LinkObjectRefs(byte kind, object obj)
         {
             if (obj == null) return;
             try
             {
-                if (kind == 1) _kingdomLoad2?.Invoke(obj, null);
-                else if (kind == 2 && obj is City c) c.loadLeader();
+                if (kind == 1 && obj is Kingdom k)
+                {
+                    if (_kingdomDataF == null) _kingdomDataF = AccessTools.Field(typeof(Kingdom), "data");
+                    if (_kingdomKingIdGetter == null) _kingdomKingIdGetter = AccessTools.PropertyGetter(typeof(KingdomData), "kingID");
+                    long wantKing = 0;
+                    try
+                    {
+                        var kd = _kingdomDataF?.GetValue(k);
+                        if (kd != null && _kingdomKingIdGetter != null) wantKing = Convert.ToInt64(_kingdomKingIdGetter.Invoke(kd, null));
+                    }
+                    catch { }
+                    if (wantKing < 0) wantKing = 0;   // -1 = no king
+                    long haveKing = 0;
+                    try { haveKing = k.king != null ? k.king.id : 0; } catch { }
+                    if (wantKing != haveKing) _kingdomLoad2?.Invoke(k, null);
+                }
+                else if (kind == 2 && obj is City c)
+                {
+                    if (_cityDataF == null) _cityDataF = AccessTools.Field(typeof(City), "data");
+                    if (_cityLeaderIdGetter == null) _cityLeaderIdGetter = AccessTools.PropertyGetter(typeof(CityData), "leaderID");
+                    long wantLeader = 0;
+                    try
+                    {
+                        var cd = _cityDataF?.GetValue(c);
+                        if (cd != null && _cityLeaderIdGetter != null) wantLeader = Convert.ToInt64(_cityLeaderIdGetter.Invoke(cd, null));
+                    }
+                    catch { }
+                    if (wantLeader < 0) wantLeader = 0;   // -1 = no leader
+                    long haveLeader = 0;
+                    try { haveLeader = c.leader != null ? c.leader.id : 0; } catch { }
+                    if (wantLeader != haveLeader) c.loadLeader();
+                }
             }
             catch (Exception e) { if (_linkErr < 4) { _linkErr++; ModLog.Warn($"LinkObjectRefs(kind={kind}): " + (e.InnerException ?? e).Message); } }
         }

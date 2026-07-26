@@ -240,10 +240,19 @@ namespace WorldboxMP.Client.Dev
             try { speed = Config.time_scale_asset != null ? Config.time_scale_asset.id : "?"; } catch { }
             // MapBox.map_stats is internal at runtime (publicized-DLL gotcha) - reach it by reflection.
             string age = "?"; try { var ms = AccessTools.Field(typeof(MapBox), "map_stats")?.GetValue(World.world) as MapStats; if (ms != null) age = ms.world_age_id; } catch { }
+            // era darkness (age_moon overlay ramp): compare king vs follower to verify era visuals
+            float nightMod = -1f;
+            try
+            {
+                var era = AccessTools.Field(typeof(MapBox), "era_manager")?.GetValue(World.world);
+                var gm = era != null ? AccessTools.Method(era.GetType(), "getNightMod") : null;
+                if (gm != null) nightMod = (float)gm.Invoke(era, null);
+            }
+            catch { }
             bool winActive = false; try { winActive = ScrollWindow.isWindowActive(); } catch { }
             int sapient = 0, mobs = 0;
             try { var l = World.world.units.getSimpleList(); for (int i = 0; i < l.Count; i++) { var a = l[i]; if (a == null || !a.isAlive()) continue; if (a.isSapient()) sapient++; else mobs++; } } catch { }
-            sb.Append($"\"actors\":{actors},\"sapient\":{sapient},\"mobs\":{mobs},\"paused\":{(paused ? "true" : "false")},\"speed\":\"{Esc(speed)}\",\"winActive\":{(winActive ? "true" : "false")},\"kingPaused\":{(MirrorManager.KingPaused ? "true" : "false")},\"age\":\"{Esc(age)}\",");
+            sb.Append($"\"actors\":{actors},\"sapient\":{sapient},\"mobs\":{mobs},\"paused\":{(paused ? "true" : "false")},\"speed\":\"{Esc(speed)}\",\"winActive\":{(winActive ? "true" : "false")},\"kingPaused\":{(MirrorManager.KingPaused ? "true" : "false")},\"age\":\"{Esc(age)}\",\"nightMod\":{nightMod.ToString("F2", CultureInfo.InvariantCulture)},");
             // projectiles in flight + action-visual histograms (data-level verify of the
             // Anim/Slash/Projectile sync: compare these between king and follower).
             int projCount = -1;
@@ -302,6 +311,11 @@ namespace WorldboxMP.Client.Dev
             }
             catch { }
             sb.Append($"\"kingsLinked\":\"{kingsLinked}/{kingsTotal}\",\"leadersLinked\":\"{leadersLinked}/{citiesTotal}\",");
+            // burning tiles (verify fire sync: compare king vs follower).
+            // HashSetWorldTile : HashSet<WorldTile> implements only the GENERIC ICollection<T>.
+            int fires = -1;
+            try { fires = (AccessTools.Field(typeof(WorldBehaviourActionFire), "_tiles")?.GetValue(null) as System.Collections.Generic.ICollection<WorldTile>)?.Count ?? -1; } catch { }
+            sb.Append($"\"fires\":{fires},");
             sb.Append($"\"projectiles\":{projCount},\"jumping\":{jumping},\"anims\":{{");
             int ac = 0;
             foreach (var kv in animCounts) { if (ac++ > 0) sb.Append(","); sb.Append($"\"{Esc(kv.Key)}\":{kv.Value}"); }

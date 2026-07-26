@@ -209,6 +209,13 @@ namespace WorldboxMP.Client.Mirror
                 else ModLog.Warn("hook MISS: EffectsLibrary.spawn");
                 _stackEffectsField = AccessTools.Field(typeof(MapBox), "stack_effects");
                 _stackEffectsUpdate = _stackEffectsField != null ? AccessTools.Method(_stackEffectsField.FieldType, "update", new[] { typeof(float) }) : null;
+                // Era visuals: the WorldAge SYNC sets the age id, but the dark overlay
+                // (age_moon etc. have overlay_darkness=true) is a _night_multiplier ramped
+                // ONLY in WorldAgeManager.updateEffects - which runs from era_manager.update
+                // inside the skipped simulation. Drive just updateEffects on followers
+                // (it does NOT advance age progress; that stays king-authoritative).
+                _eraMgrField = AccessTools.Field(typeof(MapBox), "era_manager");
+                _eraUpdateEffects = AccessTools.Method(AccessTools.TypeByName("WorldAgeManager"), "updateEffects");
 
                 // World-log announcements (top-left "X was murdered by Y" feed). All of them
                 // funnel through WorldLogMessageExtensions.add; followers never generate any
@@ -619,6 +626,8 @@ namespace WorldboxMP.Client.Mirror
 
         private static FieldInfo _stackEffectsField;
         private static MethodInfo _stackEffectsUpdate;
+        private static FieldInfo _eraMgrField;
+        private static MethodInfo _eraUpdateEffects;
 
         // King: an effect spawned through the generic funnel - mirror CLOUDS only (weather).
         // pParam1 is the CloudAsset id; the spawned effect's transform holds the position
@@ -754,6 +763,9 @@ namespace WorldboxMP.Client.Mirror
             // lives in the skipped updateSimulation, so without this the mirrored clouds and
             // every synced effect would freeze in place on followers.
             try { var se = _stackEffectsField?.GetValue(__instance); if (se != null) _stackEffectsUpdate?.Invoke(se, new object[] { pElapsed }); } catch { }
+            // Era visual effects (the age darkness ramp + special ambience). Only the
+            // effects part - age PROGRESS stays king-fed via the WorldAge sync.
+            try { var era = _eraMgrField?.GetValue(__instance); if (era != null) _eraUpdateEffects?.Invoke(era, new object[] { pElapsed }); } catch { }
 
             if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
