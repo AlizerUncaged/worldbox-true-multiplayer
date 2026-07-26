@@ -24,6 +24,11 @@
     <ProjectReference Include="..\Shared\WorldboxMP.Shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Credentials/config next to the exe (read at startup; env vars override). -->
+    <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Debug auto-deploy: copy the whole framework-dependent output (exe + all deps +
        deps.json + runtimeconfig.json) into worldbox/Server so it's ready to run. -->
   <Target Name="DeployServer" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
@@ -32,7 +37,7 @@
     </ItemGroup>
     <MakeDir Directories="$(ServerDeployDir)" />
     <!-- ContinueOnError: if the server is currently running it locks these DLLs; don't
-         fail the build — just warn so the user knows to stop it to pick up the new build. -->
+         fail the build - just warn so the user knows to stop it to pick up the new build. -->
     <Copy SourceFiles="@(_ServerOut)"
           DestinationFiles="@(_ServerOut->'$(ServerDeployDir)\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"

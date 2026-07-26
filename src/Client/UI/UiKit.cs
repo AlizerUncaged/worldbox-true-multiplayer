@@ -59,12 +59,40 @@ namespace WorldboxMP.Client.UI
             return go;
         }
 
+        // The game's REAL UI font, taken from a native prefab text (the prefab-authored
+        // font is authoritative; LocalizedTextManager.current_font can be null/generic
+        // for latin languages, which made our labels fall back to the default font).
+        private static Font _gameFont;
+        public static Font GameFont()
+        {
+            if (_gameFont != null) return _gameFont;
+            try
+            {
+                var tmpl = GetNativeInputTemplate() ?? GetNativeButtonTemplate();
+                var t = tmpl != null ? tmpl.GetComponentInChildren<Text>(true) : null;
+                if (t != null && t.font != null) _gameFont = t.font;
+            }
+            catch { }
+            if (_gameFont == null)
+                try { _gameFont = LocalizedTextManager.current_font; } catch { }
+            if (_gameFont != null) ModLog.Info("[UI] game font resolved: " + _gameFont.name);
+            return _gameFont;
+        }
+
+        /// <summary>Apply the game's font to a text (call for any Text built outside UiKit).</summary>
+        public static void ApplyGameFont(Text t)
+        {
+            var f = GameFont();
+            if (f != null && t != null) t.font = f;
+        }
+
         public static Text MakeText(string name, Transform parent, string text, int size = 13,
             TextAnchor align = TextAnchor.MiddleLeft, FontStyle style = FontStyle.Normal, Color? color = null)
         {
             var go = MakeRect(name, parent);
             var t = go.AddComponent<Text>();
             OT.InitializeCommonText(t);          // applies the game font/material
+            ApplyGameFont(t);                    // prefab-authored font wins over current_font
             t.text = text;
             t.fontSize = size;
             t.alignment = align;
@@ -85,8 +113,12 @@ namespace WorldboxMP.Client.UI
             le.minHeight = h; le.preferredHeight = h;
         }
 
+        /// <summary>Native-styled button. Default: stretches to fill its row at 30px tall.
+        /// Pass <paramref name="width"/> &gt; 0 for a fixed-width compact button (e.g. a
+        /// per-row action like Kick) that does not stretch.</summary>
         public static Button MakeButton(string name, Transform parent, string label,
-            System.Action onClick, Color? color = null, int fontSize = 13)
+            System.Action onClick, Color? color = null, int fontSize = 13,
+            float height = 30f, float width = -1f)
         {
             var tmpl = GetNativeButtonTemplate();
             if (tmpl != null)
@@ -117,21 +149,29 @@ namespace WorldboxMP.Client.UI
                             lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
                             lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
                         }
-                        else { txt.gameObject.SetActive(true); txt.text = label; txt.fontSize = fontSize; txt.alignment = TextAnchor.MiddleCenter; txt.color = Color.white; }
-                        var le = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
-                        le.minHeight = 30f; le.preferredHeight = 30f; le.flexibleWidth = 1f;
+                        else { txt.gameObject.SetActive(true); txt.text = label; txt.fontSize = fontSize; txt.alignment = TextAnchor.MiddleCenter; txt.color = Color.white; ApplyGameFont(txt); }
+                        SizeButton(go, height, width);
                         return btn;
                     }
                     Object.Destroy(go);
                 }
                 catch (System.Exception e) { ModLog.Warn("[UI] native button clone failed: " + e.Message); }
             }
-            return MakeButtonFallback(name, parent, label, onClick, color, fontSize);
+            return MakeButtonFallback(name, parent, label, onClick, color, fontSize, height, width);
         }
 
-        /// <summary>Hand-built flat button — used only if the native clone is unavailable.</summary>
+        private static void SizeButton(GameObject go, float height, float width)
+        {
+            var le = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
+            le.minHeight = height; le.preferredHeight = height;
+            if (width > 0f) { le.minWidth = width; le.preferredWidth = width; le.flexibleWidth = 0f; }
+            else le.flexibleWidth = 1f;
+        }
+
+        /// <summary>Hand-built flat button - used only if the native clone is unavailable.</summary>
         public static Button MakeButtonFallback(string name, Transform parent, string label,
-            System.Action onClick, Color? color = null, int fontSize = 13)
+            System.Action onClick, Color? color = null, int fontSize = 13,
+            float height = 30f, float width = -1f)
         {
             var go = MakeRect(name, parent);
             var img = go.AddComponent<Image>();
@@ -149,7 +189,7 @@ namespace WorldboxMP.Client.UI
             var lrt = label2.rectTransform;
             lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
             lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
-            SetHeight(go, 30f);
+            SizeButton(go, height, width);
             return btn;
         }
 
@@ -187,7 +227,7 @@ namespace WorldboxMP.Client.UI
             try
             {
                 var prefab = Resources.Load<Button>("ui/PrefabWorldBoxButton");
-                if (prefab == null) { ModLog.Warn("[UI] PrefabWorldBoxButton missing — using fallback button"); return null; }
+                if (prefab == null) { ModLog.Warn("[UI] PrefabWorldBoxButton missing - using fallback button"); return null; }
                 EnsureTemplateHolder();
                 _nativeButtonTemplate = Object.Instantiate(prefab.gameObject, _uiTemplateHolder.transform);
                 _nativeButtonTemplate.name = "WBMP_NativeButtonTemplate";
@@ -205,14 +245,14 @@ namespace WorldboxMP.Client.UI
             try
             {
                 var prefab = Resources.Load<GameObject>("windows/kingdom");
-                if (prefab == null) { ModLog.Warn("[UI] windows/kingdom prefab missing — using fallback input"); return null; }
+                if (prefab == null) { ModLog.Warn("[UI] windows/kingdom prefab missing - using fallback input"); return null; }
                 // Instantiate under an INACTIVE holder so the window's Awake/Start never run.
                 EnsureTemplateHolder();
                 var temp = Object.Instantiate(prefab, _uiTemplateHolder.transform);
                 var src = FindDeep(temp.transform, "NameInputElement");
                 if (src == null || src.GetComponent<NameInput>() == null)
                 {
-                    ModLog.Warn("[UI] NameInputElement not found in kingdom window — using fallback input");
+                    ModLog.Warn("[UI] NameInputElement not found in kingdom window - using fallback input");
                     Object.Destroy(temp);
                     return null;
                 }
@@ -263,7 +303,7 @@ namespace WorldboxMP.Client.UI
             return MakeInputFallback(name, parent, placeholder, password, maxLen);
         }
 
-        // Native rename fields show the current name, not a placeholder — so make sure one exists.
+        // Native rename fields show the current name, not a placeholder - so make sure one exists.
         private static void EnsurePlaceholder(InputField input, string placeholder)
         {
             var ph = input.placeholder as Text;
@@ -276,6 +316,7 @@ namespace WorldboxMP.Client.UI
                 prt.offsetMin = trt.offsetMin; prt.offsetMax = trt.offsetMax;
                 ph = phGo.AddComponent<Text>();
                 OT.InitializeCommonText(ph);
+                ApplyGameFont(ph);
                 ph.fontSize = input.textComponent.fontSize;
                 ph.alignment = input.textComponent.alignment;
                 input.placeholder = ph;
@@ -289,7 +330,7 @@ namespace WorldboxMP.Client.UI
             }
         }
 
-        /// <summary>Hand-built dark input box — used only if the native clone is unavailable.</summary>
+        /// <summary>Hand-built dark input box - used only if the native clone is unavailable.</summary>
         public static InputField MakeInputFallback(string name, Transform parent, string placeholder,
             bool password = false, int maxLen = 64)
         {
@@ -309,6 +350,7 @@ namespace WorldboxMP.Client.UI
             rt.offsetMin = new Vector2(8, 2); rt.offsetMax = new Vector2(-8, -2);
             var txt = textGo.AddComponent<Text>();
             OT.InitializeCommonText(txt);
+            ApplyGameFont(txt);
             txt.fontSize = 13; txt.alignment = TextAnchor.MiddleLeft;
             txt.supportRichText = false;
             txt.color = Color.white;
@@ -319,6 +361,7 @@ namespace WorldboxMP.Client.UI
             prt.offsetMin = new Vector2(8, 2); prt.offsetMax = new Vector2(-8, -2);
             var ph = phGo.AddComponent<Text>();
             OT.InitializeCommonText(ph);
+            ApplyGameFont(ph);
             ph.fontSize = 13; ph.alignment = TextAnchor.MiddleLeft;
             ph.fontStyle = FontStyle.Italic;
             ph.color = new Color(1f, 1f, 1f, 0.4f);

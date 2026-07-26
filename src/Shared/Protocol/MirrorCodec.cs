@@ -10,8 +10,7 @@ namespace WorldboxMP.Shared.Protocol
     public struct TerrainMsg { public int X; public int Y; public string TileId; public string TopId; }
     /// <summary>
     /// A full creature spawn. Carries the king actor's serialized ActorData (and its
-    /// SubspeciesData, if any) so the follower can rebuild an identical creature —
-    /// same subspecies, color, stats, speed, genes, traits, equipment, age, and id.
+    /// SubspeciesData, if any) so the follower can rebuild an identical creature - /// same subspecies, color, stats, speed, genes, traits, equipment, age, and id.
     /// </summary>
     public struct SpawnMsg
     {
@@ -49,7 +48,7 @@ namespace WorldboxMP.Shared.Protocol
     /// <summary>One actor's action-visual change (MirrorKind.Anim). Empty string = cleared.
     /// Jump &gt; 0 = set timer_jump_animation to that value (one-shot hop; 0 = no change).</summary>
     public struct AnimMsg { public long Id; public string AnimId; public string TaskId; public float Jump; }
-    /// <summary>One slash effect (MirrorKind.Slash) — mirrors Actor.spawnSlash args.
+    /// <summary>One slash effect (MirrorKind.Slash) - mirrors Actor.spawnSlash args.
     /// SlashType "" = null (weapon slash). HasAngle gates the nullable pAngle.</summary>
     public struct SlashMsg
     {
@@ -57,7 +56,22 @@ namespace WorldboxMP.Shared.Protocol
         public float DistMod; public float TargetZ; public float StartZ;
         public bool HasAngle; public float Angle;
     }
-    /// <summary>A projectile launch (MirrorKind.Projectile) — mirrors ProjectileManager.spawn args.
+    /// <summary>Opaque plugin-channel envelope (MirrorKind.Plugin). Payload belongs to the
+    /// third-party mod that registered the channel; we only route it.</summary>
+    public struct PluginMsg { public string Channel; public byte[] Data; }
+    /// <summary>A cloud spawn (MirrorKind.Weather): CloudAsset id + world position.</summary>
+    public struct WeatherMsg { public string CloudId; public float X; public float Y; }
+    /// <summary>A WorldLogMessage DTO (MirrorKind.Announce), field-by-field (the game class
+    /// cannot be JSON-serialized: Unity Vector2 self-references via .normalized).</summary>
+    public struct AnnounceMsg
+    {
+        public string AssetId; public int Timestamp;
+        public string S1; public string S2; public string S3;
+        public string C1; public string C2; public string C3;
+        public long UnitId; public long KingdomId;
+        public bool HasPos; public int X; public int Y;
+    }
+    /// <summary>A projectile launch (MirrorKind.Projectile) - mirrors ProjectileManager.spawn args.
     /// Initiator/Target are BaseSimObject ids (actor or building; 0 = none).</summary>
     public struct ProjectileMsg
     {
@@ -229,6 +243,51 @@ namespace WorldboxMP.Shared.Protocol
                     HasAngle = r.GetBool(), Angle = r.GetFloat()
                 });
             return list;
+        }
+
+        public static byte[] Write(WeatherMsg m)
+        {
+            var w = new NetDataWriter(); w.Put(m.CloudId ?? ""); w.Put(m.X); w.Put(m.Y); return w.CopyData();
+        }
+        public static WeatherMsg ReadWeather(byte[] data)
+        {
+            var r = new NetDataReader(data); return new WeatherMsg { CloudId = r.GetString(), X = r.GetFloat(), Y = r.GetFloat() };
+        }
+
+        public static byte[] Write(AnnounceMsg m)
+        {
+            var w = new NetDataWriter();
+            w.Put(m.AssetId ?? ""); w.Put(m.Timestamp);
+            w.Put(m.S1 ?? ""); w.Put(m.S2 ?? ""); w.Put(m.S3 ?? "");
+            w.Put(m.C1 ?? ""); w.Put(m.C2 ?? ""); w.Put(m.C3 ?? "");
+            w.Put(m.UnitId); w.Put(m.KingdomId);
+            w.Put(m.HasPos); w.Put(m.X); w.Put(m.Y);
+            return w.CopyData();
+        }
+        public static AnnounceMsg ReadAnnounce(byte[] data)
+        {
+            var r = new NetDataReader(data);
+            return new AnnounceMsg
+            {
+                AssetId = r.GetString(), Timestamp = r.GetInt(),
+                S1 = r.GetString(), S2 = r.GetString(), S3 = r.GetString(),
+                C1 = r.GetString(), C2 = r.GetString(), C3 = r.GetString(),
+                UnitId = r.GetLong(), KingdomId = r.GetLong(),
+                HasPos = r.GetBool(), X = r.GetInt(), Y = r.GetInt()
+            };
+        }
+
+        public static byte[] Write(PluginMsg m)
+        {
+            var w = new NetDataWriter();
+            w.Put(m.Channel ?? "");
+            w.PutBytesWithLength(m.Data ?? System.Array.Empty<byte>());
+            return w.CopyData();
+        }
+        public static PluginMsg ReadPlugin(byte[] data)
+        {
+            var r = new NetDataReader(data);
+            return new PluginMsg { Channel = r.GetString(), Data = r.GetBytesWithLength() };
         }
 
         public static byte[] Write(ProjectileMsg m)

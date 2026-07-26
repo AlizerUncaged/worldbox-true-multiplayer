@@ -58,10 +58,23 @@ namespace WorldboxMP.Client.Net
         public NetClient()
         {
             Instance = this;
-            _net = new NetManager(_listener) { AutoRecycle = true, UpdateTime = 15, UnconnectedMessagesEnabled = false };
+            _net = new NetManager(_listener)
+            {
+                AutoRecycle = true, UpdateTime = 15, UnconnectedMessagesEnabled = false,
+                EnableStatistics = true   // thread-safe byte/packet counters for the HUD
+            };
             WireEvents();
             WirePackets();
         }
+
+        /// <summary>Transport-level round-trip time in ms, measured by LiteNetLib's own
+        /// logic thread (independent of the Unity frame loop, so a busy main thread can't
+        /// inflate it). -1 while disconnected.</summary>
+        public int TransportRttMs => _server != null && State == ConnState.Connected ? _server.RoundTripTime : -1;
+
+        /// <summary>Total bytes received/sent over the socket since startup (thread-safe longs).</summary>
+        public long BytesReceived => _net.Statistics.BytesReceived;
+        public long BytesSent => _net.Statistics.BytesSent;
 
         // ── Lifecycle ───────────────────────────────────────────────────────
         public void Connect(string host = null, int port = 0)
@@ -211,7 +224,10 @@ namespace WorldboxMP.Client.Net
 
         private void OnRosterPacket(RoomRoster p)
         {
-            if (p.ShareableId == RoomId)
+            // Accept when it's for our room, OR when we don't know our room yet: during a
+            // join, the in-join roster broadcast can arrive just before our RoomJoined (the
+            // server only ever sends us rosters for our own room, so buffering it is safe).
+            if (p.ShareableId == RoomId || RoomId.Length == 0)
             {
                 Roster = p.Players;
                 // Keep my own role in sync (promotions/demotions).

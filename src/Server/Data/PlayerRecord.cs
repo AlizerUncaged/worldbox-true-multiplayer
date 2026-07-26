@@ -9,8 +9,8 @@ namespace WorldboxMP.Server.Data
     ///
     /// The internal Mongo <see cref="Id"/> (ObjectId) is sequential-ish and
     /// enumerable, so it is never exposed externally. Everything outward-facing
-    /// (room membership, identification, etc.) uses <see cref="Id4"/> — a fully
-    /// random Guid v4 — instead.
+    /// (room membership, identification, etc.) uses <see cref="Id4"/> - a fully
+    /// random Guid v4 - instead.
     /// </summary>
     public class PlayerRecord
     {

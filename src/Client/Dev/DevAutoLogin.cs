@@ -29,12 +29,12 @@ namespace WorldboxMP.Client.Dev
             if (_started) return;
             _started = true;
 
-            if (!DevFileExists()) { ModLog.Info("[dev] no .dev file — auto-login disabled."); return; }
+            if (!DevFileExists()) { ModLog.Info("[dev] no .dev file - auto-login disabled."); return; }
 
             int n = InstanceIndex();
             User = "testp" + n;
             DevConsole.SetTitle(User);
-            ModLog.Info($"[dev] .dev detected — auto-login as {User} (instance #{n}).");
+            ModLog.Info($"[dev] .dev detected - auto-login as {User} (instance #{n}).");
 
             var net = NetClient.Instance;
             net.OnStateChanged += s =>
@@ -86,7 +86,7 @@ namespace WorldboxMP.Client.Dev
                 foreach (var p in Process.GetProcessesByName(me.ProcessName))
                 {
                     try { if (p.Id != me.Id && p.StartTime < myStart) rank++; }
-                    catch { /* access denied on some processes — ignore */ }
+                    catch { /* access denied on some processes - ignore */ }
                 }
                 return rank;
             }

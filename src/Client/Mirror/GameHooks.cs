@@ -9,12 +9,12 @@ namespace WorldboxMP.Client.Mirror
 {
     /// <summary>
     /// Harmony patches that drive mirroring:
-    ///  • PlayerControl.clickedFinal  — capture/defer local god-power actions.
-    ///  • ActorManager.spawnNewUnit   — king broadcasts authoritative spawns.
-    ///  • MapAction.terraformTile     — king broadcasts terrain/biome/block changes.
-    ///  • Actor.b6_updateAI           — suppress follower AI *decisions* only.
+    ///  • PlayerControl.clickedFinal  - capture/defer local god-power actions.
+    ///  • ActorManager.spawnNewUnit   - king broadcasts authoritative spawns.
+    ///  • MapAction.terraformTile     - king broadcasts terrain/biome/block changes.
+    ///  • Actor.b6_updateAI           - suppress follower AI *decisions* only.
     ///
-    /// We deliberately do NOT suppress movement/animation/render on followers — the
+    /// We deliberately do NOT suppress movement/animation/render on followers - the
     /// game keeps interpolating each actor toward its <c>next_step_position</c> (which
     /// we feed from the king's stream), so creatures move smoothly and render at full
     /// detail instead of as their zoomed-out sprites.
@@ -37,7 +37,7 @@ namespace WorldboxMP.Client.Mirror
                 if (dropSpawn != null) harmony.Patch(dropSpawn, postfix: H(nameof(DropSpawn_Postfix)));
 
                 // createNewUnit catches player/miracle spawns. BUT village BIRTHS use a SEPARATE
-                // method, createBabyActorFromData(ActorData, WorldTile, City) — not createNewUnit.
+                // method, createBabyActorFromData(ActorData, WorldTile, City) - not createNewUnit.
                 // Without hooking it, born citizens never broadcast -> followers have no city
                 // members -> city population stays 0. Hook both.
                 var spawn = AccessTools.Method(typeof(ActorManager), "createNewUnit");
@@ -56,12 +56,19 @@ namespace WorldboxMP.Client.Mirror
                 if (terraform != null)
                     harmony.Patch(terraform, prefix: H(nameof(Terraform_Prefix)), postfix: H(nameof(Terraform_Postfix)));
 
+                // Death/damage are KING-AUTHORITATIVE. The follower's passive sim still runs
+                // environmental damage (drowning/starvation/fire -> getHit) and can locally
+                // kill+destroy a mirrored actor the king still has - which is exactly how
+                // village populations drifted (king "Roin 7" vs follower "Roin 2"). Block the
+                // local paths: deaths only ever arrive via ApplyDeath (setAlive), damage via
+                // Health/Resync. ApplyingRemote (replayed god powers) stays allowed so their
+                // impact feedback still plays.
                 var die = AccessTools.Method(typeof(Actor), "die");
-                if (die != null) harmony.Patch(die, postfix: H(nameof(Die_Postfix)));
+                if (die != null) harmony.Patch(die, prefix: H(nameof(SuppressFollowerDie_Prefix)), postfix: H(nameof(Die_Postfix)));
 
                 // Drops fall + animate on followers (drop_manager.update in the passive sim), but
                 // their landing EXPLOSION (action_landed = terraform/fire/effect/shake) must NOT run
-                // — that's king-authoritative and double-running it leaves a frozen explosion sprite
+                // - that's king-authoritative and double-running it leaves a frozen explosion sprite
                 // + endless shake + divergent terrain. Prefix Drop.land() on followers to skip the
                 // explosion yet still landDrop() (remove the drop) so it disappears cleanly. The
                 // crater/fire/deaths arrive via the king's synced terraform/fire/health.
@@ -75,7 +82,7 @@ namespace WorldboxMP.Client.Mirror
                 var removeFire = AccessTools.Method(typeof(WorldBehaviourActionFire), "removeFire");
                 if (removeFire != null) harmony.Patch(removeFire, postfix: H(nameof(RemoveFire_Postfix)));
 
-                // moveTo is the per-tile step commit — THE event for movement mirroring.
+                // moveTo is the per-tile step commit - THE event for movement mirroring.
                 var moveTo = AccessTools.Method(typeof(Actor), "moveTo", new[] { typeof(WorldTile) });
                 if (moveTo != null) harmony.Patch(moveTo, postfix: H(nameof(MoveTo_Postfix)));
 
@@ -90,9 +97,16 @@ namespace WorldboxMP.Client.Mirror
                 var setName = AccessTools.Method(typeof(NanoObject), "setName", new[] { typeof(string), typeof(bool) });
                 if (setName != null) harmony.Patch(setName, postfix: H(nameof(SetName_Postfix)));
 
-                // Combat / health.
+                // Combat / health (see the death/damage authority note above).
                 var getHit = AccessTools.Method(typeof(Actor), "getHit");
-                if (getHit != null) harmony.Patch(getHit, postfix: H(nameof(GetHit_Postfix)));
+                if (getHit != null) harmony.Patch(getHit, prefix: H(nameof(SuppressFollowerGetHit_Prefix)), postfix: H(nameof(GetHit_Postfix)));
+
+                // Actor REMOVAL (corpse cleanup). With local deaths blocked, follower corpses
+                // would linger forever (and dead members inflate city population counts) -
+                // so mirror the king's actual actor destruction and remove the same actor.
+                var actorDestroy = AccessTools.Method(typeof(ActorManager), "destroyObject", new[] { typeof(Actor) });
+                if (actorDestroy != null) harmony.Patch(actorDestroy, postfix: H(nameof(ActorDestroy_Postfix)));
+                else ModLog.Warn("hook MISS: ActorManager.destroyObject");
 
                 // Status effects.
                 var addStatus = AccessTools.Method(typeof(Actor), "addStatusEffect", new[] { typeof(StatusAsset), typeof(float), typeof(bool) });
@@ -114,7 +128,7 @@ namespace WorldboxMP.Client.Mirror
                 PatchCreate(harmony, typeof(CultureManager), "newCulture", typeof(Culture));
                 PatchCreate(harmony, typeof(LanguageManager), "newLanguage", typeof(Language));
                 // Buildings: hook the FUNNEL overload addBuilding(BuildingAsset, WorldTile, …)
-                // — addBuilding(string,…) calls it, and civs/placement may call it directly,
+                // - addBuilding(string,…) calls it, and civs/placement may call it directly,
                 // so this catches every addBuilding-based creation (e.g. village huts). NOTE:
                 // flora (trees/bushes/rocks) is created via addTree/addFlora, NOT addBuilding,
                 // so it is not covered here (those grow autonomously and aren't player-relevant).
@@ -126,7 +140,7 @@ namespace WorldboxMP.Client.Mirror
                     { harmony.Patch(mi, postfix: H(nameof(StructuralCreate_Postfix))); break; }
                 }
 
-                // Structural object destruction (removeObject) — one postfix for all.
+                // Structural object destruction (removeObject) - one postfix for all.
                 PatchRemove(harmony, typeof(KingdomManager), typeof(Kingdom));
                 PatchRemove(harmony, typeof(CityManager), typeof(City));
                 PatchRemove(harmony, typeof(WarManager), typeof(War));
@@ -137,7 +151,7 @@ namespace WorldboxMP.Client.Mirror
                 PatchRemove(harmony, typeof(LanguageManager), typeof(Language));
                 PatchRemove(harmony, typeof(BuildingManager), typeof(Building));
                 // Bombs/disasters/fire destroy buildings via Building.startDestroyBuilding(), NOT
-                // BuildingManager.removeObject — so those destructions never reached followers
+                // BuildingManager.removeObject - so those destructions never reached followers
                 // (e.g. a volcano bombed away on the king persisted on the follower). Hook it and
                 // broadcast a removal so the follower removes the same building.
                 var destroyBuilding = AccessTools.Method(typeof(Building), "startDestroyBuilding");
@@ -173,19 +187,37 @@ namespace WorldboxMP.Client.Mirror
                 // ProjectileManager.spawn; followers re-spawn it for the visual (their
                 // projectiles.update already runs in the passive sim below). On followers a
                 // projectile is VISUAL-ONLY: checkHitOnNearbyUnits is replaced (no local damage/
-                // deflect — hits arrive via the king's Health/Death sync) and its landing
+                // deflect - hits arrive via the king's Health/Death sync) and its landing
                 // world-actions are already neutralized (Terraform_Prefix/Fire_Prefix).
                 var projSpawn = AccessTools.Method(typeof(ProjectileManager), "spawn");
                 if (projSpawn != null) harmony.Patch(projSpawn, postfix: H(nameof(ProjectileSpawn_Postfix)));
                 var projHit = AccessTools.Method(typeof(Projectile), "checkHitOnNearbyUnits");
                 if (projHit != null) harmony.Patch(projHit, prefix: H(nameof(ProjectileCheckHit_Prefix)));
                 // targetReached runs impact_actions/world_actions with a possibly-unresolvable
-                // initiator on the follower — swallow any NRE there so one bad projectile can't
+                // initiator on the follower - swallow any NRE there so one bad projectile can't
                 // stall the whole projectiles.update for that frame.
                 var projReached = AccessTools.Method(typeof(Projectile), "targetReached");
                 if (projReached != null) harmony.Patch(projReached, finalizer: H(nameof(ProjectileTargetReached_Finalizer)));
 
-                // Slash effects — the swing/punch/kick/talk arcs. spawnSlash is the single funnel
+                // Weather: cloud spawns come from the "clouds" world behaviour, which only the
+                // king runs. Hook the effects funnel and mirror fx_cloud spawns (asset + pos);
+                // the follower's stack_effects update (added to the passive sim below) drifts
+                // and rains them like the king's does.
+                var fxSpawn = AccessTools.Method(typeof(EffectsLibrary), "spawn",
+                    new[] { typeof(string), typeof(WorldTile), typeof(string), typeof(string), typeof(float), typeof(float), typeof(float), typeof(Actor) });
+                if (fxSpawn != null) harmony.Patch(fxSpawn, postfix: H(nameof(EffectSpawn_Postfix)));
+                else ModLog.Warn("hook MISS: EffectsLibrary.spawn");
+                _stackEffectsField = AccessTools.Field(typeof(MapBox), "stack_effects");
+                _stackEffectsUpdate = _stackEffectsField != null ? AccessTools.Method(_stackEffectsField.FieldType, "update", new[] { typeof(float) }) : null;
+
+                // World-log announcements (top-left "X was murdered by Y" feed). All of them
+                // funnel through WorldLogMessageExtensions.add; followers never generate any
+                // (suppressed sim), so the king mirrors each message DTO.
+                var wlAdd = AccessTools.Method(AccessTools.TypeByName("WorldLogMessageExtensions"), "add");
+                if (wlAdd != null) harmony.Patch(wlAdd, postfix: H(nameof(WorldLogAdd_Postfix)));
+                else ModLog.Warn("hook MISS: WorldLogMessageExtensions.add");
+
+                // Slash effects - the swing/punch/kick/talk arcs. spawnSlash is the single funnel
                 // (spawnSlashPunch/Kick/… and weapon slashes all route through it). Followers
                 // never produce them (AI suppressed) so the king mirrors each one (batched/frame).
                 var slash = AccessTools.Method(typeof(Actor), "spawnSlash",
@@ -203,7 +235,7 @@ namespace WorldboxMP.Client.Mirror
                 // Defensive: on followers, the mirrored world can briefly hold a building
                 // with a null current_tile (e.g. created via loadObject before its tile is
                 // linked). BatchBuildings.updateVisibility then NREs every sim tick inside
-                // a parallel job — an exception storm that stalls the whole update loop
+                // a parallel job - an exception storm that stalls the whole update loop
                 // (kills input/zoom/spawn). Swallow it on followers so the client stays
                 // responsive; the king is authoritative and must NOT mask real bugs.
                 var bbVis = AccessTools.Method(typeof(BatchBuildings), "updateVisibility");
@@ -227,15 +259,15 @@ namespace WorldboxMP.Client.Mirror
                 // (movement interp) + updateBuildings (render, guarded) + updateMapLayers.
                 _mbUpdateBuildings = AccessTools.Method(typeof(MapBox), "updateBuildings", new[] { typeof(float) });
                 // MapBox.updateBuildings is a DEBUG-gated no-op (only runs buildings.update when
-                // DebugOption.SystemUpdateBuildings is set). The REAL building batch update — which
-                // schedules the updateVisibility job that sets each building's is_visible — lives
+                // DebugOption.SystemUpdateBuildings is set). The REAL building batch update - which
+                // schedules the updateVisibility job that sets each building's is_visible - lives
                 // in the part of updateSimulation we skip. Without it, high-res render
                 // (calculateVisibleBuildings -> fillVisibleObjects, filtered by is_visible) finds
                 // NO buildings -> they only appear in the low-res bit-scale chunk render. So call
                 // BuildingManager.update directly on the follower.
                 _buildingsUpdate = AccessTools.Method(typeof(BuildingManager), "update", new[] { typeof(float) });
                 // BuildingZonesSystem.update() is the ONLY thing that fills each zone's
-                // buildings_render_list — the list the HIGH-RES render iterates
+                // buildings_render_list - the list the HIGH-RES render iterates
                 // (BuildingManager.fillVisibleObjects copies zone.buildings_render_list). It runs
                 // only in the skipped part of updateSimulation. addBuildingMain already marks the
                 // zone + global dirty on load, so calling update() here rebuilds the render list
@@ -494,7 +526,7 @@ namespace WorldboxMP.Client.Mirror
         }
 
         // Terrain is king-authoritative: block autonomous terraform on followers (e.g. a
-        // drop/nuke explosion's crater) so it can't diverge — only the king's synced terraform
+        // drop/nuke explosion's crater) so it can't diverge - only the king's synced terraform
         // (ApplyingRemote) applies. The visual fall/boom still plays; the crater comes from sync.
         private static bool Terraform_Prefix()
         {
@@ -512,8 +544,14 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingDeath(__instance);
         }
 
-        // Follower: a falling drop reached the ground. Skip its explosion (action_landed) — that
-        // is king-authoritative — but still remove the drop (landDrop) so it doesn't freeze in
+        // King: an actor was finally destroyed (corpse decayed / removed) - mirror it.
+        private static void ActorDestroy_Postfix(Actor pActor)
+        {
+            MirrorManager.Instance?.OnKingActorDestroy(pActor);
+        }
+
+        // Follower: a falling drop reached the ground. Skip its explosion (action_landed) - that
+        // is king-authoritative - but still remove the drop (landDrop) so it doesn't freeze in
         // place. Returns false to skip the original land(). King/idle run land() normally.
         private static bool DropLand_Prefix(Drop __instance)
         {
@@ -556,7 +594,43 @@ namespace WorldboxMP.Client.Mirror
             return m == null || !m.IsFollower;
         }
 
-        // King: a slash effect played (attack swing/punch/kick/talk/yell) — queue it for
+        // Followers never run the real die(): deaths arrive exclusively via ApplyDeath's
+        // setAlive(false) (corpse transition). Blocking die() entirely prevents the local
+        // sim (drowning/starvation) from destroying actors the king still has.
+        private static bool SuppressFollowerDie_Prefix()
+        {
+            var m = MirrorManager.Instance;
+            return m == null || !m.IsFollower;
+        }
+
+        // Followers take no local damage; health flows from the king (Health + Resync).
+        // Replayed god powers (ApplyingRemote) keep their impact feedback.
+        private static bool SuppressFollowerGetHit_Prefix()
+        {
+            var m = MirrorManager.Instance;
+            return m == null || !m.IsFollower || m.ApplyingRemote;
+        }
+
+        // King: a world-log announcement was posted - mirror the DTO to followers.
+        private static void WorldLogAdd_Postfix(WorldLogMessage pMessage)
+        {
+            MirrorManager.Instance?.OnKingAnnounce(pMessage);
+        }
+
+        private static FieldInfo _stackEffectsField;
+        private static MethodInfo _stackEffectsUpdate;
+
+        // King: an effect spawned through the generic funnel - mirror CLOUDS only (weather).
+        // pParam1 is the CloudAsset id; the spawned effect's transform holds the position
+        // (randomized inside the cloud's spawn_action, so we read the RESULT, not the args).
+        private static void EffectSpawn_Postfix(BaseEffect __result, string pID, string pParam1)
+        {
+            if (__result == null || pID != "fx_cloud") return;
+            var pos = __result.transform.position;
+            MirrorManager.Instance?.OnKingCloud(pParam1, pos.x, pos.y);
+        }
+
+        // King: a slash effect played (attack swing/punch/kick/talk/yell) - queue it for
         // this frame's batch so followers render the same arc on the mirrored actor.
         private static void SpawnSlash_Postfix(Actor __instance, Vector2 pTowardsPosition,
             string pSlashType, float pDistMod, float pTargetZ, float pStartZ, float? pAngle)
@@ -564,7 +638,7 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingSlash(__instance, pTowardsPosition, pSlashType, pDistMod, pTargetZ, pStartZ, pAngle);
         }
 
-        // King: a projectile launched — broadcast it so followers show the flight.
+        // King: a projectile launched - broadcast it so followers show the flight.
         private static void ProjectileSpawn_Postfix(Projectile __result, BaseSimObject pInitiator,
             BaseSimObject pTargetObject, string pAssetID, Vector3 pLaunchPosition, Vector3 pTargetPosition,
             float pTargetZ, float pStartPosZ)
@@ -574,7 +648,7 @@ namespace WorldboxMP.Client.Mirror
                     pLaunchPosition, pTargetPosition, pTargetZ, pStartPosZ);
         }
 
-        // Follower: projectiles are visual-only — never compute local hits/deflects/blocks
+        // Follower: projectiles are visual-only - never compute local hits/deflects/blocks
         // (that would double damage or even locally kill a mirrored actor; real hits arrive
         // via the king's Health/Death sync). Airborne → keep flying; on ground → land (the
         // Miss path plays fx + targetReached, whose world actions are prefix-blocked).
@@ -599,7 +673,7 @@ namespace WorldboxMP.Client.Mirror
             return __exception;
         }
 
-        // Skip local stat recompute on followers — stats come authoritatively from the king
+        // Skip local stat recompute on followers - stats come authoritatively from the king
         // (the follower's genome/subspecies is incomplete and would compute maxHealth=1).
         private static bool SuppressUpdateStats_Prefix()
         {
@@ -651,7 +725,7 @@ namespace WorldboxMP.Client.Mirror
             try { _buildingZonesUpdate?.Invoke(null, null); } catch { }
             // Keep each meta-manager's `list` cache fresh. The game sim calls checkLists() (rebuilds
             // list from _hashset when _dirty_list); the passive sim skips it, so `list` stays stale/
-            // empty on followers — and MANY systems iterate `list`: nameplate/banner rendering (city
+            // empty on followers - and MANY systems iterate `list`: nameplate/banner rendering (city
             // + kingdom names on the map), stats, etc. checkLists() is cheap (early-returns unless
             // dirty). Without this, synced cities/kingdoms exist (get/_hashset) but have no map name.
             var w = World.world;
@@ -676,6 +750,10 @@ namespace WorldboxMP.Client.Mirror
             // resync. So only the visual fall + boom plays; the crater/fire/deaths come from sync.
             try { var dm = _dropMgrField?.GetValue(__instance); if (dm != null) _dropUpdate?.Invoke(dm, new object[] { pElapsed }); } catch { }
             try { var pm = _projMgrField?.GetValue(__instance); if (pm != null) _projUpdate?.Invoke(pm, new object[] { pElapsed }); } catch { }
+            // Effects (clouds, explosion visuals, tile fx, hearts...): stack_effects.update
+            // lives in the skipped updateSimulation, so without this the mirrored clouds and
+            // every synced effect would freeze in place on followers.
+            try { var se = _stackEffectsField?.GetValue(__instance); if (se != null) _stackEffectsUpdate?.Invoke(se, new object[] { pElapsed }); } catch { }
 
             if (!_passiveLogged) { _passiveLogged = true; ModLog.Info("[FOLLOWER] passive simulation engaged (actors+render at king's tick rate)."); }
             return false; // skip the full autonomous simulation
@@ -730,7 +808,7 @@ namespace WorldboxMP.Client.Mirror
         }
 
         // Skip building shake on followers when the building has no batch (uninitialized
-        // mirrored building) — the shake code dereferences batch.rnd / batch.c_shake.
+        // mirrored building) - the shake code dereferences batch.rnd / batch.c_shake.
         private static bool BuildingUpdateShake_Prefix(Building __instance)
         {
             var m = MirrorManager.Instance;

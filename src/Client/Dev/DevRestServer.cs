@@ -18,7 +18,7 @@ namespace WorldboxMP.Client.Dev
     /// <summary>
     /// DEBUG-ONLY HTTP control bridge so the dev (Claude) can drive automated test loops:
     /// spawn units, create/join rooms, and read back authoritative state to compare king vs
-    /// follower — without manually clicking the game. Each instance binds the first free port
+    /// follower - without manually clicking the game. Each instance binds the first free port
     /// from 8750 and logs it. Unity APIs only run on the main thread, so every request is
     /// marshaled into NetPump.Update via a queue. Compiled out entirely in Release.
     ///
@@ -47,7 +47,7 @@ namespace WorldboxMP.Client.Dev
                     l.Start();
                     _listener = l; Port = p; break;
                 }
-                catch { /* port taken — try next */ }
+                catch { /* port taken - try next */ }
             }
             if (_listener == null) { ModLog.Warn("[REST] no free port 8750-8770"); return; }
             _running = true;
@@ -78,7 +78,7 @@ namespace WorldboxMP.Client.Dev
             }
         }
 
-        // Called on the MAIN thread from NetPump.Update — runs queued jobs against Unity/game state.
+        // Called on the MAIN thread from NetPump.Update - runs queued jobs against Unity/game state.
         public static void Drain()
         {
             if (!_running) return;
@@ -117,9 +117,66 @@ namespace WorldboxMP.Client.Dev
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                     return Ok("age id " + Get(q, "id", "age_spawn"));
                 case "power": return Power(q);
+                case "relink":
+                    // Diagnostic: per kingdom/city dump the saved ruler id vs the live link,
+                    // then force the loader's link pass (Kingdom.load2 / City.loadLeader).
+                    try
+                    {
+                        var sbr = new StringBuilder("{\"kingdoms\":[");
+                        var load2 = AccessTools.Method(typeof(Kingdom), "load2");
+                        var kdataF = AccessTools.Field(typeof(Kingdom), "data");
+                        int n0 = 0;
+                        if (World.world?.kingdoms is IEnumerable kss)
+                            foreach (var k in kss)
+                            {
+                                if (!(k is Kingdom kk)) continue;
+                                long kid = -1;
+                                try
+                                {
+                                    var kd = kdataF?.GetValue(kk);
+                                    var f = kd != null ? AccessTools.Field(kd.GetType(), "kingID") : null;
+                                    if (f != null) kid = Convert.ToInt64(f.GetValue(kd));
+                                    else { var pr = kd != null ? AccessTools.PropertyGetter(kd.GetType(), "kingID") : null; if (pr != null) kid = Convert.ToInt64(pr.Invoke(kd, null)); }
+                                }
+                                catch { }
+                                bool before = false; try { before = kk.king != null; } catch { }
+                                string err = "";
+                                try { load2?.Invoke(kk, null); } catch (Exception le) { err = (le.InnerException ?? le).Message; }
+                                bool after = false; try { after = kk.king != null; } catch { }
+                                bool actorExists = false; try { actorExists = kid > 0 && World.world.units.get(kid) != null; } catch { }
+                                if (n0++ > 0) sbr.Append(",");
+                                sbr.Append($"{{\"id\":{kk.id},\"dataKingID\":{kid},\"actorExists\":{(actorExists ? "true" : "false")},\"before\":{(before ? "true" : "false")},\"after\":{(after ? "true" : "false")},\"err\":\"{Esc(err)}\"}}");
+                            }
+                        sbr.Append("],\"cities\":[");
+                        n0 = 0;
+                        var cdataF = AccessTools.Field(typeof(City), "data");
+                        if (World.world?.cities is IEnumerable css)
+                            foreach (var c in css)
+                            {
+                                if (!(c is City cy)) continue;
+                                long lid = -1;
+                                try
+                                {
+                                    var cd = cdataF?.GetValue(cy);
+                                    var pr = cd != null ? AccessTools.PropertyGetter(cd.GetType(), "leaderID") : null;
+                                    if (pr != null) lid = Convert.ToInt64(pr.Invoke(cd, null));
+                                    else { var f = cd != null ? AccessTools.Field(cd.GetType(), "leaderID") : null; if (f != null) lid = Convert.ToInt64(f.GetValue(cd)); }
+                                }
+                                catch { }
+                                bool before = false; try { before = cy.leader != null; } catch { }
+                                string err = "";
+                                try { cy.loadLeader(); } catch (Exception le) { err = (le.InnerException ?? le).Message; }
+                                bool after = false; try { after = cy.leader != null; } catch { }
+                                if (n0++ > 0) sbr.Append(",");
+                                sbr.Append($"{{\"id\":{cy.id},\"dataLeaderID\":{lid},\"before\":{(before ? "true" : "false")},\"after\":{(after ? "true" : "false")},\"err\":\"{Esc(err)}\"}}");
+                            }
+                        sbr.Append("]}");
+                        return sbr.ToString();
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "closewin":
                     // A dialog pauses the local sim (effective pause = Config.paused || isWindowActive),
-                    // which silently freezes AI/tasks/combat on this instance — close everything.
+                    // which silently freezes AI/tasks/combat on this instance - close everything.
                     try { ScrollWindow.hideAllEvent(pWithAnimation: false); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                     return Ok("windows closed");
                 case "model3d": try { var inst = WorldboxMP.Client.UI.Model3D.Instance; if (inst == null) return "{\"error\":\"Model3D.Instance null (Spawn didn't run)\"}"; if (Get(q, "act", "show") == "hide") inst.Teardown(); else inst.Activate(); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; } return Ok("model3d " + Get(q, "act", "show"));
@@ -165,11 +222,23 @@ namespace WorldboxMP.Client.Dev
             sb.Append("{");
             sb.Append($"\"role\":\"{role}\",\"connState\":\"{net?.State}\",\"loggedIn\":{(net != null && net.LoggedIn ? "true" : "false")},");
             sb.Append($"\"roomId\":\"{Esc(net?.RoomId ?? "")}\",\"inRoom\":{(net != null && net.InRoom ? "true" : "false")},\"isKing\":{(net != null && net.IsKing ? "true" : "false")},");
+            // roster as THIS client sees it (verifies the roster push reaches non-kings too)
+            sb.Append("\"roster\":[");
+            try
+            {
+                var ros = net?.Roster;
+                if (ros != null)
+                    for (int i = 0; i < ros.Count; i++)
+                    { if (i > 0) sb.Append(","); sb.Append($"\"{Esc(ros[i].Username)}:{ros[i].Role}\""); }
+            }
+            catch { }
+            sb.Append("],");
+            sb.Append($"\"rttMs\":{net?.TransportRttMs ?? -1},\"bytesRx\":{net?.BytesReceived ?? 0},\"bytesTx\":{net?.BytesSent ?? 0},");
             int actors = -1; try { actors = World.world.units.getSimpleList().Count; } catch { }
             bool paused = false; string speed = "?";
             try { paused = Config.paused; } catch { }
             try { speed = Config.time_scale_asset != null ? Config.time_scale_asset.id : "?"; } catch { }
-            // MapBox.map_stats is internal at runtime (publicized-DLL gotcha) — reach it by reflection.
+            // MapBox.map_stats is internal at runtime (publicized-DLL gotcha) - reach it by reflection.
             string age = "?"; try { var ms = AccessTools.Field(typeof(MapBox), "map_stats")?.GetValue(World.world) as MapStats; if (ms != null) age = ms.world_age_id; } catch { }
             bool winActive = false; try { winActive = ScrollWindow.isWindowActive(); } catch { }
             int sapient = 0, mobs = 0;
@@ -211,6 +280,28 @@ namespace WorldboxMP.Client.Dev
                 }
             }
             catch { }
+            // king/leader link diagnostics (crown + leader-face map icons draw only when
+            // kingdom.king / city.leader are LIVE references, not just ids in data).
+            int kingsLinked = 0, kingsTotal = 0, leadersLinked = 0, citiesTotal = 0;
+            try
+            {
+                if (World.world?.kingdoms is IEnumerable ks)
+                    foreach (var k in ks)
+                    {
+                        if (!(k is Kingdom kk)) continue;
+                        kingsTotal++;
+                        try { if (kk.king != null && kk.king.isAlive()) kingsLinked++; } catch { }
+                    }
+                if (World.world?.cities is IEnumerable cs)
+                    foreach (var c in cs)
+                    {
+                        if (!(c is City cityObj)) continue;
+                        citiesTotal++;
+                        try { if (cityObj.leader != null && cityObj.leader.isAlive()) leadersLinked++; } catch { }
+                    }
+            }
+            catch { }
+            sb.Append($"\"kingsLinked\":\"{kingsLinked}/{kingsTotal}\",\"leadersLinked\":\"{leadersLinked}/{citiesTotal}\",");
             sb.Append($"\"projectiles\":{projCount},\"jumping\":{jumping},\"anims\":{{");
             int ac = 0;
             foreach (var kv in animCounts) { if (ac++ > 0) sb.Append(","); sb.Append($"\"{Esc(kv.Key)}\":{kv.Value}"); }

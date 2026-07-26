@@ -25,13 +25,13 @@ namespace WorldboxMP.Client
             ModLog.Info($"Loading WorldBox Multiplayer v{GetDeclaration().Version}...");
 
             // The mod's folder on disk (used to find optional icon PNGs). NML loads
-            // compiled mods from memory, so Assembly.Location is empty — use the
+            // compiled mods from memory, so Assembly.Location is empty - use the
             // ModDeclare folder instead.
             try { IconFactory.ModFolder = GetDeclaration()?.FolderPath; }
             catch { IconFactory.ModFolder = null; }
 
             // Each step is isolated so a failure in one (e.g. a Harmony hook) can't
-            // take down the whole mod — it logs and the rest still loads.
+            // take down the whole mod - it logs and the rest still loads.
             var net = new NetClient();
             Step("UI", () => { MultiplayerWindow.Ensure(); NetPump.Spawn(); UI.PlayerCursors.Spawn(); UI.PingHud.Spawn(); UI.Model3D.Spawn(); });
             Step("mirroring", () =>

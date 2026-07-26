@@ -74,7 +74,7 @@ namespace WorldboxMP.Client.UI
                         if (x < minX) minX = x; if (x > maxX) maxX = x;
                         if (y < minY) minY = y; if (y > maxY) maxY = y;
                     }
-            if (maxX < minX) return src;                    // fully transparent — leave as-is
+            if (maxX < minX) return src;                    // fully transparent - leave as-is
             int cw = maxX - minX + 1, ch = maxY - minY + 1;
             if (cw == w && ch == h) return src;             // nothing to trim
             var dst = new Texture2D(cw, ch, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };

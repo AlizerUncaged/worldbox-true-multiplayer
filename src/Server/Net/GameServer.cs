@@ -108,7 +108,7 @@ namespace WorldboxMP.Server.Net
 
         private Session SessionOf(NetPeer peer) => _sessions.TryGetValue(peer, out var s) ? s : null;
 
-        /// <summary>A reconnect of the same account replaces its old session — keep it simple, no dup sessions.</summary>
+        /// <summary>A reconnect of the same account replaces its old session - keep it simple, no dup sessions.</summary>
         private void DropOldSessions(Session keep)
         {
             var stale = new List<NetPeer>();
@@ -162,6 +162,10 @@ namespace WorldboxMP.Server.Net
             var room = _rooms.CreateRoom(s, req.Name, req.Password, (RoomVisibility)req.Visibility, out var err);
             if (room == null) { peer.Send(_proc, new RoomError { Message = err }); return; }
             peer.Send(_proc, new RoomJoined { ShareableId = room.ShareableId, Name = room.Name, MyRole = (byte)RoomRole.King });
+            // The roster broadcast inside CreateRoom/JoinRoom reaches this client BEFORE its
+            // RoomJoined (it still has no RoomId, so it drops the packet). Re-push now that
+            // the client knows its room - otherwise a joiner sees an empty player list.
+            _rooms.PushRoster(room);
         }
 
         private void OnJoinRoom(JoinRoomRequest req, NetPeer peer)
@@ -171,6 +175,7 @@ namespace WorldboxMP.Server.Net
             if (room == null) { peer.Send(_proc, new RoomError { Message = err }); return; }
             var me = room.Get(s.Id4);
             peer.Send(_proc, new RoomJoined { ShareableId = room.ShareableId, Name = room.Name, MyRole = (byte)(me?.Role ?? RoomRole.Player) });
+            _rooms.PushRoster(room);   // see OnCreateRoom: the joiner missed the in-join roster push
 
             // Ask the king (if any, and not us) to send this joiner the current world.
             var king = room.GetKing();
@@ -237,7 +242,7 @@ namespace WorldboxMP.Server.Net
             }
         }
 
-        // Verbose, human-readable logging of mirrored gameplay (EntityState is skipped — 10 Hz spam).
+        // Verbose, human-readable logging of mirrored gameplay (EntityState is skipped - 10 Hz spam).
         private void LogMirror(Session s, MirrorMessage msg)
         {
             string room = s.CurrentRoom.ShareableId;

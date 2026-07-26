@@ -37,7 +37,7 @@ existing world; everything after is **granular events** (no periodic reload).
 | Cursors | local mouse (20 Hz, sequenced) | God-finger + name, screen-space |
 
 ## How close to 1:1?
-**Visible, player-driven, and structural state: effectively 1:1** — actions, spawns,
+**Visible, player-driven, and structural state: effectively 1:1** - actions, spawns,
 deaths, terrain, fire, kingdoms/cities/wars/etc., year all mirror as events.
 
 **Not perfectly 1:1 (by design / known):**
@@ -45,12 +45,12 @@ deaths, terrain, fire, kingdoms/cities/wars/etc., year all mirror as events.
   timers, autonomous fire/plant growth). These tick locally and can drift slightly
   between the authoritative events. Deaths/health/fire are corrected by their events;
   aging visuals may differ briefly. True 1:1 would require making followers fully
-  passive (skip the whole sim tick) — but that also kills movement interpolation +
+  passive (skip the whole sim tick) - but that also kills movement interpolation +
   render, so it needs careful in-game tuning (not done blind).
-- **Kingdom color** isn't a granular setter on `Kingdom` (it's on the data) — it
+- **Kingdom color** isn't a granular setter on `Kingdom` (it's on the data) - it
   arrives via `KingdomData` on create/resync, not per recolor.
 - **Per-frame creature state** beyond position (e.g. exact animation frame, facing on
-  idle) isn't streamed — followers animate locally.
+  idle) isn't streamed - followers animate locally.
 
 ## Safety net
 The **Resync** button (room panel) makes the king broadcast a full world snapshot to
@@ -61,4 +61,4 @@ is too disruptive to run on a timer).
 Make followers fully passive: prefix-skip the world simulation tick on followers while
 keeping `u10_checkSmoothMovement` (movement interp) + render running, so the king is the
 sole simulator and followers purely replay events. This removes all drift but risks
-freezing visuals if the wrong methods are suppressed — must be validated in-game.
+freezing visuals if the wrong methods are suppressed - must be validated in-game.

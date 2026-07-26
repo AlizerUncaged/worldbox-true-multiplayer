@@ -41,7 +41,7 @@ simulates; followers display.
 ## 2. Identity & accounts
 
 - `players` collection in Mongo. Internal `_id` is an `ObjectId` and is **never**
-  exposed. The external id is **`id4`** — a Guid v4 — used for all room
+  exposed. The external id is **`id4`** - a Guid v4 - used for all room
   membership, moderation targets, cursor ownership, etc. (Random, non-enumerable.)
 - Passwords: PBKDF2-SHA256, 100k iterations, per-user salt.
 - Unique indexes on `username_lower` and `id4`.
@@ -86,7 +86,7 @@ EntityState, SimControl).
 ## 5. Verified WorldBox / NML internals
 
 Confirmed by decompiling the **real** `Assembly-CSharp.dll` (the publicized DLL
-lies about accessibility — the real one is the source of truth). `pub` = directly
+lies about accessibility - the real one is the source of truth). `pub` = directly
 callable; `int` = internal/private, reach via Harmony/reflection.
 
 ### Action pipeline (observe → broadcast, and re-apply)
@@ -119,9 +119,9 @@ Re-apply on the king: call the same APIs (`clickedFinal` via AccessTools with
 ### Simulation control (lockstep)
 - Pause: `Config.paused` (`pub static bool`). Read this, not the internal `MapBox.isPaused()`.
 - Speed: `Config.setWorldSpeed(string id)` / `Config.time_scale_asset` (`pub`).
-- Note: the game resets `Config.paused = false` on world load — reapply replicated state after a load.
+- Note: the game resets `Config.paused = false` on world load - reapply replicated state after a load.
 
-### UI (tab + windows + icons) — all NML, `pub`
+### UI (tab + windows + icons) - all NML, `pub`
 - Tab: `NeoModLoader.General.UI.Tab.TabManager.CreateTab(name, titleKey, descKey, Sprite icon)`.
 - Buttons: `NeoModLoader.General.PowerButtonCreator.CreateSimpleButton(id, UnityAction, icon)` +
   `AddButtonToTab(button, tab)`.
@@ -151,10 +151,10 @@ state is broadcast to everyone.
    floating hand + name.
 
 ### Open problems being designed around
-- **ID remapping** (local id allocators collide) — server/king authoritative ids.
-- **Determinism** — avoided by single-authority simulation; followers never simulate.
-- **Snapshot cost** — multi-MB; only on join, not per tick. Live sync is deltas.
-- **King handoff** — if the king leaves, promote another client to authority and
+- **ID remapping** (local id allocators collide) - server/king authoritative ids.
+- **Determinism** - avoided by single-authority simulation; followers never simulate.
+- **Snapshot cost** - multi-MB; only on join, not per tick. Live sync is deltas.
+- **King handoff** - if the king leaves, promote another client to authority and
   reseed from its latest snapshot (future work; currently king-leave ends the
   shared sim for that room).
 

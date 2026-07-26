@@ -12,7 +12,7 @@ namespace WorldboxMP.Client.Dev
     /// Assembly-CSharp). So a follower stuck on simple/blocky sprites is simply stuck
     /// zoomed-out. This logs the exact camera state on every scroll-wheel input and on
     /// F10, so we can see whether scroll input reaches the follower at all and how the
-    /// zoom values respond — instead of guessing. Lands in wbmp-client.log via ModLog.
+    /// zoom values respond - instead of guessing. Lands in wbmp-client.log via ModLog.
     /// All game members are internal at runtime, so we go through reflection.
     /// </summary>
     internal static class CameraDiag

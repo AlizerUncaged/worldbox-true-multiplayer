@@ -9,11 +9,34 @@ namespace WorldboxMP.Server
 {
     internal static class Program
     {
-        // Defaults; override with env vars WBMP_MONGO / WBMP_PORT.
-        // Self-hosted MongoDB (authSource=admin). Password is %-encoded in the URI
-        // (?! -> %3F!). db name (worldboxmp) is supplied in the connection string.
-        private const string DefaultMongo =
-            "mongodb://localhost:27017/wbmp";
+        // Config precedence: env vars WBMP_MONGO / WBMP_PORT > appsettings.json > built-in defaults.
+        // Credentials (the Mongo connection string) live in appsettings.json next to the exe
+        // (copied from src/Server on build). The password is %-encoded in the URI (?! -> %3F!);
+        // the db name (worldboxmp) is supplied in the connection string.
+        private const string DefaultMongo = "mongodb://127.0.0.1:27017/worldboxmp";
+
+        private sealed class AppSettings
+        {
+            public string Mongo { get; set; }
+            public int Port { get; set; }
+        }
+
+        private static AppSettings LoadAppSettings()
+        {
+            try
+            {
+                string path = System.IO.Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+                if (!System.IO.File.Exists(path)) path = "appsettings.json";
+                if (!System.IO.File.Exists(path)) return new AppSettings();
+                var json = System.IO.File.ReadAllText(path);
+                return System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("WARN: could not read appsettings.json (" + e.Message + ") - using defaults.");
+                return new AppSettings();
+            }
+        }
 
         private static void Main(string[] args)
         {
@@ -40,8 +63,11 @@ namespace WorldboxMP.Server
 
         private static void Run()
         {
-            string mongo = Environment.GetEnvironmentVariable("WBMP_MONGO") ?? DefaultMongo;
-            int port = int.TryParse(Environment.GetEnvironmentVariable("WBMP_PORT"), out var p) ? p : NetProtocol.DefaultPort;
+            var settings = LoadAppSettings();
+            string mongo = Environment.GetEnvironmentVariable("WBMP_MONGO")
+                           ?? (string.IsNullOrWhiteSpace(settings.Mongo) ? DefaultMongo : settings.Mongo);
+            int port = int.TryParse(Environment.GetEnvironmentVariable("WBMP_PORT"), out var p) ? p
+                       : (settings.Port > 0 ? settings.Port : NetProtocol.DefaultPort);
 
             Console.WriteLine("=== WorldBox Multiplayer Server ===");
 
@@ -65,7 +91,7 @@ namespace WorldboxMP.Server
                 {
                     Console.WriteLine();
                     Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
-                    Console.WriteLine(" CONNECTION TIMED OUT — whitelist your IP in MongoDB Atlas! ".Pastel(System.Drawing.Color.Gold));
+                    Console.WriteLine(" CONNECTION TIMED OUT - whitelist your IP in MongoDB Atlas! ".Pastel(System.Drawing.Color.Gold));
                     Console.WriteLine(" Atlas → Network Access → Add IP Address → 'Add Current IP'  ".Pastel(System.Drawing.Color.Gold));
                     Console.WriteLine(" (or 0.0.0.0/0 to allow all). Atlas drops your IP regularly. ".Pastel(System.Drawing.Color.Gold));
                     Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
@@ -75,7 +101,7 @@ namespace WorldboxMP.Server
                     Console.WriteLine("\nLikely the Atlas cluster is paused, or the connection string/credentials are wrong.");
                 }
                 Console.WriteLine("Override with env WBMP_MONGO=<connection string> and restart.");
-                Pause();   // do not exit silently — wait so the error is readable
+                Pause();   // do not exit silently - wait so the error is readable
                 return;
             }
 

@@ -7,24 +7,29 @@ everyone in real time, with rooms, accounts, and a moderation hierarchy.
 
 > Status: **early foundation.** Networking, accounts, rooms, and the in-game
 > manager UI are in place. The world-mirroring layer is scaffolded and being
-> built out — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the roadmap below.
+> built out - see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the roadmap below.
 
 ## Repository layout
 
 ```
 Worldbox-Multiplayer.slnx
 src/
-  Shared/   WorldboxMP.Shared   (netstandard2.0)  — packet contracts shared by both sides
-  Server/   WorldboxMP.Server   (net8.0 console)  — bare-metal game server + MongoDB
-  Client/   WorldboxMP.Client   (net48 NML mod)   — the in-game mod
+  Shared/   WorldboxMP.Shared   (netstandard2.0)  - packet contracts shared by both sides
+  Server/   WorldboxMP.Server   (net8.0 console)  - bare-metal game server + MongoDB
+  Client/   WorldboxMP.Client   (net48 NML mod)   - the in-game mod
 docs/
-  ARCHITECTURE.md   — the design, the mirror model, the protocol, the hooks
+  ARCHITECTURE.md   - the design, the mirror model, the protocol, the hooks
 ```
 
 - **Transport:** [LiteNetLib](https://github.com/RevenantX/LiteNetLib) (reliable/ordered + sequenced channels).
-- **Server endpoint (dev):** `127.0.0.1:40441`.
+- **Server endpoint:** `127.0.0.1:40441` in DEBUG builds; the public server in Release.
+  Override with a `.env` (see `src/Client/.env.example`) or the in-game settings dialog.
+- **Server config:** `src/Server/appsettings.json` (Mongo connection string, port);
+  env vars `WBMP_MONGO` / `WBMP_PORT` override it.
 - **Database:** MongoDB (`wmulti`). Player accounts only; rooms are in-memory.
   External identity is a random **`id4`** (Guid v4), never the enumerable Mongo `ObjectId`.
+- **Modders:** want your mod to work in multiplayer? See [PLUGINS.md](PLUGINS.md) -
+  a small public API (`WbmpApi`) with role checks and named sync channels.
 
 ## Build
 
@@ -45,7 +50,7 @@ The client references the local WorldBox/NML assemblies via relative paths
 ## Run the server
 
 The server is a **framework-dependent** .NET 8 app (needs the .NET 8 runtime
-installed). Publish it (cross-platform — runs on Windows and Ubuntu):
+installed). Publish it (cross-platform - runs on Windows and Ubuntu):
 
 ```bash
 dotnet publish src/Server/WorldboxMP.Server.csproj -c Release -o <out-dir>
@@ -66,7 +71,7 @@ Override config via env vars: `WBMP_MONGO=<connection string>`, `WBMP_PORT=40441
 
 It connects to MongoDB, ensures the permanent room **`0000`** ("Lobby"), listens
 on UDP `40441`, and prints colored, verbose logs (joins, god powers, spawns, sim
-changes — each with the acting username).
+changes - each with the acting username).
 
 ## Deploy the client mod
 

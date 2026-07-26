@@ -128,6 +128,7 @@ namespace WorldboxMP.Client.UI
             lr.anchoredPosition = new Vector2(0, -34);    // centered under the finger
             var label = labelGo.AddComponent<Text>();
             OT.InitializeCommonText(label);
+            UiKit.ApplyGameFont(label);
             label.fontSize = 13;
             label.alignment = TextAnchor.MiddleCenter;
             label.horizontalOverflow = HorizontalWrapMode.Overflow;

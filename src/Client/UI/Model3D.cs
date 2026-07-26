@@ -96,7 +96,7 @@ namespace WorldboxMP.Client.UI
             if (_typed.Length == Phrase.Length && _typed.ToString() == Phrase)
             {
                 _typed.Length = 0;
-                ModLog.Info("[3D] easter egg phrase detected — summoning");
+                ModLog.Info("[3D] easter egg phrase detected - summoning");
                 Activate();
             }
         }

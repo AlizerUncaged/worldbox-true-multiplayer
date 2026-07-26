@@ -23,7 +23,7 @@ namespace WorldboxMP.Client.UI
         private static readonly FieldInfo _ptcInstance =
             AccessTools.Field(typeof(PowerTabController), "instance");
 
-        private class Btn { public Image Icon; public Func<bool> Enabled; }
+        private class Btn { public GameObject Go; public Image Icon; public Func<bool> Enabled; public Func<bool> Visible; }
         private static readonly List<Btn> _btns = new List<Btn>();
 
         private static Net.NetClient Net => WorldboxMP.Client.Net.NetClient.Instance;
@@ -37,28 +37,25 @@ namespace WorldboxMP.Client.UI
             {
                 var tabIcon = IconFactory.GetEmbedded("multiplayer-header-icon.png")
                               ?? IconFactory.Get("mp_tab", new Color(0.30f, 0.55f, 0.95f));
-                var tab = TabManager.CreateTab(TabId, "Multiplayer", "WorldBox Multiplayer", tabIcon);
+                var tab = TabManager.CreateTab(TabId, "True Multiplayer", "Play with other gods like yourself", tabIcon);
                 EnlargeTabIcon(tabIcon, 2f);
 
-                // Account / login — always available.
+                // Account / login - always available.
                 AddButton("wbmp_login", "Account / login",
                     IconFactory.GetEmbedded("login-icon.png") ?? IconFactory.Get("wbmp_login", new Color(0.30f, 0.55f, 0.95f)),
                     tab, AlwaysOn, MultiplayerWindow.Open);
 
-                // Players — needs to be in a room.
+                // Players - needs to be in a room.
                 AddButton("wbmp_players", "Players in the current room",
                     IconFactory.GetEmbedded("player-list-icon.png") ?? IconFactory.Get("wbmp_players", new Color(0.35f, 0.75f, 0.45f)),
                     tab, InRoom, MultiplayerWindow.Open);
 
-                // Logs — needs to be in a room.
-                AddButton("wbmp_logs", "Server logs",
-                    IconFactory.GetEmbedded("logs-icon.png") ?? IconFactory.Get("wbmp_logs", new Color(0.85f, 0.70f, 0.30f)),
-                    tab, InRoom, () => { Net?.RequestLogs(); MultiplayerWindow.Open(); });
-
-                // Settings — always available.
+                // Settings (server address) - redundant once connected, so it hides then
+                // and reappears if the connection drops.
                 AddButton("wbmp_settings", "Server settings",
                     IconFactory.GetEmbedded("settings-icon.png") ?? IconFactory.Get("wbmp_settings", new Color(0.55f, 0.55f, 0.60f)),
-                    tab, AlwaysOn, MultiplayerWindow.OpenSettings);
+                    tab, AlwaysOn, MultiplayerWindow.OpenSettings,
+                    visible: () => Net == null || Net.State != WorldboxMP.Client.Net.ConnState.Connected);
 
                 Subscribe();
                 RefreshButtons();
@@ -82,7 +79,7 @@ namespace WorldboxMP.Client.UI
             return "Not available right now.";
         }
 
-        private static void AddButton(string id, string tip, Sprite icon, PowersTab tab, Func<bool> enabled, Action action)
+        private static void AddButton(string id, string tip, Sprite icon, PowersTab tab, Func<bool> enabled, Action action, Func<bool> visible = null)
         {
             var btn = PowerButtonCreator.CreateSimpleButton(id, () =>
             {
@@ -94,7 +91,7 @@ namespace WorldboxMP.Client.UI
             Image iconImg = null;
             foreach (var img in btn.GetComponentsInChildren<Image>(true))
                 if (img.sprite == icon) { iconImg = img; break; }
-            _btns.Add(new Btn { Icon = iconImg, Enabled = enabled });
+            _btns.Add(new Btn { Go = btn.gameObject, Icon = iconImg, Enabled = enabled, Visible = visible });
         }
 
         private static void Subscribe()
@@ -111,6 +108,11 @@ namespace WorldboxMP.Client.UI
         {
             foreach (var b in _btns)
             {
+                if (b.Go != null && b.Visible != null)
+                {
+                    bool show = b.Visible();
+                    if (b.Go.activeSelf != show) b.Go.SetActive(show);
+                }
                 if (b.Icon == null) continue;
                 b.Icon.color = b.Enabled() ? Color.white : new Color(0.40f, 0.40f, 0.40f, 0.55f);
             }

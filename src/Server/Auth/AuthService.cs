@@ -24,7 +24,7 @@ namespace WorldboxMP.Server.Auth
     /// <summary>
     /// Account registration and login against the <c>players</c> collection.
     /// Passwords are stored as PBKDF2-SHA256 (100k iterations) with a per-user salt.
-    /// Calls are synchronous on purpose — they run on the network poll thread.
+    /// Calls are synchronous on purpose - they run on the network poll thread.
     /// </summary>
     public class AuthService
     {

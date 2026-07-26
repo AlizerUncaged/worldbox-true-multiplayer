@@ -76,7 +76,7 @@ namespace WorldboxMP.Shared.Protocol
         /// <summary>A status effect was added/removed (addStatusEffect/finishStatusEffect).</summary>
         Status = 13,
 
-        /// <summary>An item was equipped (ActorEquipment.setItem) — carries ItemData.</summary>
+        /// <summary>An item was equipped (ActorEquipment.setItem) - carries ItemData.</summary>
         Equip = 14,
 
         /// <summary>
@@ -86,22 +86,22 @@ namespace WorldboxMP.Shared.Protocol
         /// </summary>
         Object = 15,
 
-        /// <summary>A structural object was destroyed (manager.removeObject) — kind + id.</summary>
+        /// <summary>A structural object was destroyed (manager.removeObject) - kind + id.</summary>
         ObjectRemove = 16,
 
         /// <summary>An actor joined a kingdom/religion/culture/language/city.</summary>
         Member = 17,
 
-        /// <summary>A city changed owner (City.joinAnotherKingdom) — capture/rebellion.</summary>
+        /// <summary>A city changed owner (City.joinAnotherKingdom) - capture/rebellion.</summary>
         Capture = 18,
 
         /// <summary>A kingdom property changed (king / capital / color).</summary>
         KingdomProp = 19,
 
-        /// <summary>A war ended (WarManager.endWar) — war id + winner.</summary>
+        /// <summary>A war ended (WarManager.endWar) - war id + winner.</summary>
         WarEnd = 20,
 
-        /// <summary>A drop/disaster spawned (DropManager.spawn) — tile + drop id. Non-god-power only.</summary>
+        /// <summary>A drop/disaster spawned (DropManager.spawn) - tile + drop id. Non-god-power only.</summary>
         Disaster = 21,
 
         /// <summary>(reserved / unused) former goTo destination sync.</summary>
@@ -126,22 +126,37 @@ namespace WorldboxMP.Shared.Protocol
         WorldAge = 27,
 
         /// <summary>Per-actor action-visual state, diff-scanned on the short_poll (100ms).
-        /// Followers suppress AI, so none of these ever change there — the king streams them:
-        ///  • AnimId — ai.action.force_animation_id (rare; e.g. "burrow").
-        ///  • TaskId — ai.task.id; drives the hand-tool overlay (pickaxe/axe/hammer/basket…)
+        /// Followers suppress AI, so none of these ever change there - the king streams them:
+        ///  • AnimId - ai.action.force_animation_id (rare; e.g. "burrow").
+        ///  • TaskId - ai.task.id; drives the hand-tool overlay (pickaxe/axe/hammer/basket…)
         ///    that IS the visible mine/chop/build/farm animation, and the unit-window task text.
-        ///  • Jump — timer_jump_animation; the lunge/hop used by combat and task bounces
+        ///  • Jump - timer_jump_animation; the lunge/hop used by combat and task bounces
         ///    (decays naturally in updateParallelChecks, which followers run).</summary>
         Anim = 28,
 
         /// <summary>A projectile launched (ProjectileManager.spawn): arrows/spells/boulders in
         /// flight. Followers re-spawn it visually (their projectiles.update already runs in the
-        /// passive sim); its damage/terraform is neutralized there — hits arrive via Health/Death.</summary>
+        /// passive sim); its damage/terraform is neutralized there - hits arrive via Health/Death.</summary>
         Projectile = 29,
 
         /// <summary>Slash effects (Actor.spawnSlash): the swing/punch/kick/talk/yell arcs that
         /// make combat and interactions visibly happen. Batched per frame like Move.</summary>
         Slash = 30,
+
+        /// <summary>Third-party plugin channel (WbmpApi): an opaque (channelId, payload)
+        /// envelope other mods use to sync their own state through our king-authoritative
+        /// relay. The mod itself never interprets the payload.</summary>
+        Plugin = 31,
+
+        /// <summary>A world-log announcement (WorldLogMessage.add - the top-left "X was
+        /// murdered by Y" / "All hail the king" feed). Serialized DTO; followers re-add it
+        /// locally so their HistoryHud and log window match the king's.</summary>
+        Announce = 32,
+
+        /// <summary>Weather: a cloud spawned (EffectsLibrary "fx_cloud" with a CloudAsset id
+        /// + position). The world-behaviour spawner only runs on the king; followers re-spawn
+        /// the same cloud and their stack_effects update (run by the passive sim) drifts it.</summary>
+        Weather = 33,
     }
 }
 

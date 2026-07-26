@@ -19,10 +19,9 @@ namespace WorldboxMP.Client.Mirror
     ///  • The king is the authority. It streams unit positions and broadcasts spawns
     ///    and terrain changes. Followers' AI *decisions* are suppressed, but their
     ///    movement/animation/render keep running so creatures look correct and move
-    ///    smoothly — we just feed each unit's next_step_position from the king.
+    ///    smoothly - we just feed each unit's next_step_position from the king.
     ///  • For everything granular hooks can't cover (genes, traits, kingdoms, plots,
-    ///    equipment, meta, fire, biomes, …) the king periodically — and on demand —
-    ///    broadcasts a full world snapshot, which followers load. This is the
+    ///    equipment, meta, fire, biomes, …) the king periodically - and on demand - ///    broadcasts a full world snapshot, which followers load. This is the
     ///    catch-all that keeps the whole simulation eventually consistent.
     /// </summary>
     public class MirrorManager
@@ -45,7 +44,7 @@ namespace WorldboxMP.Client.Mirror
 
         /// <summary>Mark a follower actor stats-dirty so the game's own parallel update_stats
         /// job recomputes its derived stats (speed/combat/etc.) from the synced
-        /// subspecies+traits. We only MARK it — we do NOT call updateStats ourselves
+        /// subspecies+traits. We only MARK it - we do NOT call updateStats ourselves
         /// (doing that mid-frame corrupted render data). The batch recomputes at the safe time.</summary>
         private void MarkStatsDirty(Actor a)
         {
@@ -107,7 +106,7 @@ namespace WorldboxMP.Client.Mirror
         // Forced-animation sync (attack/eat/sleep/mine/chop/build/cast). The renderer's
         // calculateMainSprite reads ai.action.force_animation(_id); all of these are internal
         // at runtime → reflection. Follower assigns a cached synthetic BehaviourActionActor
-        // (pure render data — its startExecute never runs, the follower AI is suppressed).
+        // (pure render data - its startExecute never runs, the follower AI is suppressed).
         private static FieldInfo _actorAiField;        // Actor.ai (AiSystemActor)
         private static FieldInfo _aiActionField;       // AiSystem`5.action (via AiSystemActor)
         private static FieldInfo _aiTaskField;         // AiSystem`5.task (via AiSystemActor)
@@ -120,6 +119,9 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _punchAnim;          // Actor.punchTargetAnimation (flip+tilt toward target)
         private static object _taskLibrary;            // AssetManager.tasks_actor
         private static MethodInfo _taskLibGet;         // AssetLibrary<BehaviourTaskActor>.get(string)
+        private static MethodInfo _kingdomLoad2;       // Kingdom.load2() (internal): links capital + king + King profession
+        private static FieldInfo _professionField;     // Actor._profession (internal)
+        private static MethodInfo _setProfession;      // Actor.setProfession(UnitProfession, bool) (internal)
 
         // Registry of structural objects synced generically (Data + manager.loadObject).
         private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; public MethodInfo ReloadInstance; public MethodInfo IdGetter; }
@@ -192,6 +194,9 @@ namespace WorldboxMP.Client.Mirror
             _animSpritesField = AccessTools.Field(AccessTools.TypeByName("AnimationContainerUnit"), "sprites");
             _jumpTimerField = AccessTools.Field(typeof(Actor), "timer_jump_animation");
             _punchAnim = AccessTools.Method(typeof(Actor), "punchTargetAnimation");
+            _kingdomLoad2 = AccessTools.Method(typeof(Kingdom), "load2");
+            _professionField = AccessTools.Field(typeof(Actor), "_profession");
+            _setProfession = AccessTools.Method(typeof(Actor), "setProfession");
             try
             {
                 _taskLibrary = AccessTools.Field(typeof(AssetManager), "tasks_actor")?.GetValue(null)
@@ -207,6 +212,7 @@ namespace WorldboxMP.Client.Mirror
             net.OnSnapshotRequested += Instance.OnSnapshotRequested;
             net.OnSnapshotReceived += Instance.OnSnapshotReceived;
             net.OnRoomJoined += _ => Instance.Reset();
+            Api.WbmpApi.WireInternal();   // third-party plugin surface
             ModLog.Info("Mirroring initialized.");
         }
 
@@ -251,14 +257,14 @@ namespace WorldboxMP.Client.Mirror
         {
             if (!Active || power == null) return true;
             // Inspection / info tools (Village Info, Kingdom Info, Inspect Unit, …) open a UI
-            // window instead of changing the world — they set unselect_when_window=true. These
+            // window instead of changing the world - they set unselect_when_window=true. These
             // are LOCAL UI: do NOT mirror them (else clicking a village opens the dialogue on the
             // other client too) and do NOT suppress them locally (let the clicker see their own
             // window). Only world-changing powers get mirrored.
             // Identify a PURE inspection/info tool (Village Info, Kingdom Info, Inspect Unit):
             // opens a UI window AND has no world effect. unselect_when_window alone is too broad
             // (spawns set it too!), so require: NOT a spawn (no actor_asset_id), NOT terraform,
-            // NO drop, NO tile placement. Those are local UI — run for the clicker, don't mirror.
+            // NO drop, NO tile placement. Those are local UI - run for the clicker, don't mirror.
             bool windowTool = false, terra = false; string ptype = "?", dropId = null, tileType = null, actorAsset = null;
             try { windowTool = power.unselect_when_window; } catch { }
             try { terra = power.terraform; } catch { }
@@ -289,7 +295,7 @@ namespace WorldboxMP.Client.Mirror
             try
             {
                 // The live actor.data has save-derived fields (asset_id, coordinates,
-                // equipment, profession, home, …) UNSET — they're only populated when the
+                // equipment, profession, home, …) UNSET - they're only populated when the
                 // game saves the actor. Without this the follower's loadObject sees a null
                 // asset_id and throws ArgumentNullException. prepareForSave() fills them.
                 try { actor.prepareForSave(); } catch (Exception pe) { ModLog.Warn("[KING] prepareForSave: " + pe.Message); }
@@ -308,7 +314,7 @@ namespace WorldboxMP.Client.Mirror
                         var sub = World.world.subspecies.get(subId);
                         try { subSapient = sub != null && sub.isSapient(); } catch { }
                         // NOTE: calling sub.save() here to populate data.saved_chromosome_data (the
-                        // genome — needed for the follower to derive isSapient/base_stats) DESTABILIZED
+                        // genome - needed for the follower to derive isSapient/base_stats) DESTABILIZED
                         // the follower (snapshot reload + "duplicate key" → world wiped). Reverted;
                         // sapient-count parity needs a safer genome-sync path (TODO). Stats stay
                         // king-authoritative via the resync, which is stable.
@@ -339,6 +345,46 @@ namespace WorldboxMP.Client.Mirror
             Send(MirrorKind.Death, MirrorCodec.Write(new DeathMsg { KingId = actor.id }));
         }
 
+        /// <summary>ObjectRemove sub-kind for actors (not part of the structural registry).</summary>
+        public const byte ActorRemoveKind = 10;
+        private static MethodInfo _unitsDestroy;   // ActorManager.scheduleDestroyOnPlay(Actor), internal
+        private int _actorRemoveLog;
+
+        /// <summary>King: an actor was destroyed for real (corpse decayed/cleaned) - followers
+        /// remove the same actor so corpses do not pile up and city member lists stay clean.</summary>
+        public void OnKingActorDestroy(Actor a)
+        {
+            if (!Active || !IsKing || a == null) return;
+            try { if (SmoothLoader.isLoading()) return; } catch { }   // world clear/reload storms
+            Send(MirrorKind.ObjectRemove, MirrorCodec.Write(new ObjectRemoveMsg { Kind = ActorRemoveKind, Id = a.id }));
+        }
+
+        private bool _applyingWeather;
+        private int _weatherLog;
+        /// <summary>King: a cloud spawned (the "clouds" world behaviour only runs here).</summary>
+        public void OnKingCloud(string cloudId, float x, float y)
+        {
+            if (!Active || !IsKing || _applyingWeather || string.IsNullOrEmpty(cloudId)) return;
+            Send(MirrorKind.Weather, MirrorCodec.Write(new WeatherMsg { CloudId = cloudId, X = x, Y = y }));
+            if (_weatherLog < 8) { _weatherLog++; ModLog.Info($"[WEATHER] king: cloud '{cloudId}' at ({x:F0},{y:F0})"); }
+        }
+
+        // Follower: spawn the same cloud at the king's position. Its drift/rain runs in the
+        // passive sim's stack_effects update; rain's world changes stay king-authoritative
+        // (terraform/fire prefixes block the local side effects).
+        private void ApplyWeather(WeatherMsg m)
+        {
+            if (string.IsNullOrEmpty(m.CloudId)) return;
+            _applyingWeather = true;
+            try
+            {
+                EffectsLibrary.spawn("fx_cloud", null, m.CloudId, null, 0f, m.X, m.Y);
+                if (_weatherLog < 8) { _weatherLog++; ModLog.Info($"[WEATHER] follower: cloud '{m.CloudId}' at ({m.X:F0},{m.Y:F0})"); }
+            }
+            catch (Exception e) { ModLog.Warn("ApplyWeather failed: " + (e.InnerException ?? e).Message); }
+            finally { _applyingWeather = false; }
+        }
+
         public void OnKingFire(WorldTile tile, bool on)
         {
             if (!Active || !IsKing || tile == null) return;
@@ -352,10 +398,56 @@ namespace WorldboxMP.Client.Mirror
         }
 
         private bool _applyingProjectile;
-        private int _projSendLog, _projApplyLog, _projErr;
+        private bool _applyingAnnounce;
+        private int _projSendLog, _projApplyLog, _projErr, _announceLog, _announceErr;
+
+        /// <summary>King: a world-log announcement was posted (the top-left feed) - mirror
+        /// the DTO field-by-field so followers see the same message with the same colors/args.
+        /// (No JSON: WorldLogMessage's Vector2 property self-references via .normalized.)</summary>
+        public void OnKingAnnounce(WorldLogMessage msg)
+        {
+            if (!Active || !IsKing || _applyingAnnounce || msg == null) return;
+            try
+            {
+                Send(MirrorKind.Announce, MirrorCodec.Write(new AnnounceMsg
+                {
+                    AssetId = msg.asset_id, Timestamp = msg.timestamp,
+                    S1 = msg.special1, S2 = msg.special2, S3 = msg.special3,
+                    C1 = msg.color_special_1, C2 = msg.color_special_2, C3 = msg.color_special_3,
+                    UnitId = msg.unit_id, KingdomId = msg.kingdom_id,
+                    HasPos = msg.x.HasValue && msg.y.HasValue, X = msg.x ?? 0, Y = msg.y ?? 0
+                }));
+                if (_announceLog < 12) { _announceLog++; ModLog.Info($"[ANNOUNCE] king: '{msg.asset_id}' {msg.special1}/{msg.special2}"); }
+            }
+            catch (Exception e) { if (_announceErr < 4) { _announceErr++; ModLog.Warn("OnKingAnnounce failed: " + e.Message); } }
+        }
+
+        // Follower: re-add the king's announcement locally (fills the HistoryHud ticker AND
+        // the log window/DB). The add() postfix cannot echo: OnKingAnnounce is king-only.
+        private void ApplyAnnounce(AnnounceMsg m)
+        {
+            if (string.IsNullOrEmpty(m.AssetId)) return;
+            _applyingAnnounce = true;
+            try
+            {
+                var msg = new WorldLogMessage
+                {
+                    asset_id = m.AssetId, timestamp = m.Timestamp,
+                    special1 = m.S1, special2 = m.S2, special3 = m.S3,
+                    color_special_1 = m.C1, color_special_2 = m.C2, color_special_3 = m.C3,
+                    unit_id = m.UnitId, kingdom_id = m.KingdomId
+                };
+                if (m.HasPos) { msg.x = m.X; msg.y = m.Y; }
+                msg.add();
+                if (_announceLog < 12) { _announceLog++; ModLog.Info($"[ANNOUNCE] follower: '{m.AssetId}'"); }
+            }
+            catch (Exception e) { if (_announceErr < 4) { _announceErr++; ModLog.Warn("ApplyAnnounce failed: " + (e.InnerException ?? e).Message); } }
+            finally { _applyingAnnounce = false; }
+        }
+
         /// <summary>King: a projectile launched (ProjectileManager.spawn) → mirror the launch args.
         /// God-power projectiles are skipped (the power itself replays via clickedFinal on followers,
-        /// spawning its own) — same guard as drops.</summary>
+        /// spawning its own) - same guard as drops.</summary>
         public void OnKingProjectile(BaseSimObject initiator, BaseSimObject target, string assetId,
             Vector3 launch, Vector3 targetPos, float targetZ, float startZ)
         {
@@ -394,18 +486,18 @@ namespace WorldboxMP.Client.Mirror
                     // asset and crashes the follower sim. Call them before serializing, like save does.
                     PrepareForSave = AccessTools.Method(obj, "prepareForSave"),
                     GetData = AccessTools.Method(obj, "getData"),
-                    // Cities/kingdoms have NO prepareForSave/getData — they populate their data
+                    // Cities/kingdoms have NO prepareForSave/getData - they populate their data
                     // (incl. City.data.zones = territory) in save(). Without this the synced
                     // CityData has empty zones -> no territory/banner on the follower.
                     Save = AccessTools.Method(obj, "save"),
                     // id is a PROPERTY on BaseSystemData (public long id { get; set; }), NOT a
-                    // field — AccessTools.Field would return null. Use the property getter.
+                    // field - AccessTools.Field would return null. Use the property getter.
                     IdGetter = AccessTools.PropertyGetter(data, "id") });
             Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
             Reg(2, typeof(City), typeof(CityData), () => World.world.cities);
             // Cities expand and their name/stats change continuously, but we only get a create
             // event once. On a re-send (long_poll override) update the EXISTING city in place via
-            // loadCity(data) — re-applies territory zones + name + stats — instead of skipping it.
+            // loadCity(data) - re-applies territory zones + name + stats - instead of skipping it.
             _objReg.Find(r => r.Kind == 2).ReloadInstance = AccessTools.Method(typeof(City), "loadCity", new[] { typeof(CityData) });
             Reg(3, typeof(War), typeof(WarData), () => World.world.wars);
             Reg(4, typeof(Alliance), typeof(AllianceData), () => World.world.alliances);
@@ -447,7 +539,7 @@ namespace WorldboxMP.Client.Mirror
         private int _kingObjLog;
         private int _godLog;
         private int _cityJoinLog;
-        // God powers that only open a UI window (selection/inspection) — never mirror these.
+        // God powers that only open a UI window (selection/inspection) - never mirror these.
         private static readonly System.Collections.Generic.HashSet<string> _inspectionPowers =
             new System.Collections.Generic.HashSet<string> { "city_select", "inspect" };
         public void OnKingObject(object obj)
@@ -472,7 +564,7 @@ namespace WorldboxMP.Client.Mirror
                         object data = null;
                         try { data = r.GetData?.Invoke(obj, null); } catch (Exception ge) { ModLog.Warn($"[KING] {r.ObjType.Name}.getData: " + ge.Message); }
                         if (data == null) data = r.DataField?.GetValue(obj);   // fallback to live data field
-                        if (data == null) { ModLog.Warn($"[KING] OnKingObject({r.ObjType.Name}): data null (getData+field both null) — not synced"); return; }
+                        if (data == null) { ModLog.Warn($"[KING] OnKingObject({r.ObjType.Name}): data null (getData+field both null) - not synced"); return; }
                         var json = JsonConvert.SerializeObject(data, JsonHelper.read_settings);
                         // Heavy diag: for cities/kingdoms log what we actually serialize (name/leader/zones)
                         // so we can confirm the king's side holds correct data before it leaves.
@@ -647,6 +739,20 @@ namespace WorldboxMP.Client.Mirror
                 case MirrorKind.Slash:
                     if (IsFollower) ApplySlashBatch(MirrorCodec.ReadSlashBatch(msg.Payload));
                     break;
+                case MirrorKind.Announce:
+                    if (IsFollower) ApplyAnnounce(MirrorCodec.ReadAnnounce(msg.Payload));
+                    break;
+                case MirrorKind.Weather:
+                    if (IsFollower) ApplyWeather(MirrorCodec.ReadWeather(msg.Payload));
+                    break;
+                case MirrorKind.Plugin:
+                    // Third-party channel (WbmpApi). King-authoritative routing like GodPower:
+                    // a follower's message reaches the king only; the king relays it onward so
+                    // every client sees it, then both sides hand it to the registered handler.
+                    var pm = MirrorCodec.ReadPlugin(msg.Payload);
+                    if (IsKing) Send(MirrorKind.Plugin, msg.Payload);
+                    Api.WbmpApi.DispatchInternal(pm, !IsKing);   // we RECEIVE from the king iff we are not the king
+                    break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
                     break;
@@ -763,7 +869,7 @@ namespace WorldboxMP.Client.Mirror
             // Minimal, robust corpse transition. setAlive(false) is public: it sets _alive=false +
             // data.died_time, which switches the sprite to a corpse and makes the move replay skip
             // it (so it stops walking) + lets it decay. We deliberately do NOT call the full private
-            // die() — its side effects (exitBuilding/equipment/kingdom.removeKing/city changes) can
+            // die() - its side effects (exitBuilding/equipment/kingdom.removeKing/city changes) can
             // throw on the follower's mirrored state and leave the actor half-dead (the "walking
             // corpse/blob"). We also keep the _kingToLocal mapping so the king's later corpse removal
             // still resolves on the follower.
@@ -844,7 +950,7 @@ namespace WorldboxMP.Client.Mirror
                         var mgr = r.Mgr();
                         if (mgr == null) return;
                         // Structural objects are re-sent every long_poll. If this id ALREADY exists,
-                        // we must NOT loadObject it again — loadObject on an existing id throws
+                        // we must NOT loadObject it again - loadObject on an existing id throws
                         // (TargetInvocationException, e.g. kind=1 Kingdom). Instead: update in place
                         // if we have an updater (City.loadCity re-applies territory/name/stats), else
                         // just skip (we already have it; e.g. kingdoms derive territory from cities).
@@ -858,10 +964,12 @@ namespace WorldboxMP.Client.Mirror
                         if (existing != null)
                         {
                             if (r.ReloadInstance != null) { r.ReloadInstance.Invoke(existing, new[] { data }); DbgObjRecv++; }
-                            return;   // already have it — never re-loadObject (throws on duplicate id)
+                            LinkObjectRefs(r.Kind, existing);
+                            return;   // already have it - never re-loadObject (throws on duplicate id)
                         }
                         var load = AccessTools.Method(mgr.GetType(), "loadObject", new[] { r.DataType });
-                        load?.Invoke(mgr, new[] { data });
+                        var created = load?.Invoke(mgr, new[] { data });
+                        LinkObjectRefs(r.Kind, created);
                         DbgObjRecv++;
                         return;
                     }
@@ -870,8 +978,46 @@ namespace WorldboxMP.Client.Mirror
             finally { _applyingObject = false; }
         }
 
+        // Mid-game synced kingdoms/cities arrive via loadObject, which does NOT run the
+        // world loader's link pass - so kingdom.king / city.leader stay null on followers
+        // and the map's crown/leader-face icons never draw. Resolve the live references
+        // the same way the loader does: Kingdom.load2() links capital + king (and sets the
+        // King profession); City.loadLeader() links the leader from data.leaderID.
+        private int _linkErr;
+        private void LinkObjectRefs(byte kind, object obj)
+        {
+            if (obj == null) return;
+            try
+            {
+                if (kind == 1) _kingdomLoad2?.Invoke(obj, null);
+                else if (kind == 2 && obj is City c) c.loadLeader();
+            }
+            catch (Exception e) { if (_linkErr < 4) { _linkErr++; ModLog.Warn($"LinkObjectRefs(kind={kind}): " + (e.InnerException ?? e).Message); } }
+        }
+
         private void ApplyObjectRemove(ObjectRemoveMsg m)
         {
+            // Actors are a special sub-kind. Use the game's OWN removal contract
+            // (scheduleDestroyOnPlay -> _to_destroy_objects; the passive sim's
+            // checkObjectsToDestroy then runs destroyObject + checkContainer exactly like
+            // the king's frame does, incl. trait on-remove actions and city cleanup via
+            // removeObject). Calling destroyObject directly would skip those steps.
+            if (m.Kind == ActorRemoveKind)
+            {
+                var a = Resolve(m.Id);
+                if (a == null) return;
+                _applyingObject = true;
+                try
+                {
+                    if (_unitsDestroy == null) _unitsDestroy = AccessTools.Method(typeof(ActorManager), "scheduleDestroyOnPlay", new[] { typeof(Actor) });
+                    _unitsDestroy?.Invoke(World.world.units, new object[] { a });
+                    _kingToLocal.Remove(m.Id);
+                    if (_actorRemoveLog < 8) { _actorRemoveLog++; ModLog.Info($"[REMOVE] follower: actor {m.Id} scheduled for destroy (king cleanup)"); }
+                }
+                catch (Exception e) { ModLog.Warn("ApplyObjectRemove(actor) failed: " + (e.InnerException ?? e).Message); }
+                finally { _applyingObject = false; }
+                return;
+            }
             foreach (var r in _objReg)
                 if (r.Kind == m.Kind)
                 {
@@ -953,7 +1099,7 @@ namespace WorldboxMP.Client.Mirror
         // projectiles.update flies + renders it; checkHitOnNearbyUnits is neutralized so it
         // can't damage anything locally). A non-null kingdom is REQUIRED: the manager's
         // updateProjectiles uses projectile.kingdom as a Dictionary key every tick, and
-        // checkCollision dereferences kingdom.asset — a null kingdom would exception-storm.
+        // checkCollision dereferences kingdom.asset - a null kingdom would exception-storm.
         private void ApplyProjectile(ProjectileMsg m)
         {
             if (string.IsNullOrEmpty(m.AssetId)) return;
@@ -968,7 +1114,7 @@ namespace WorldboxMP.Client.Mirror
                 Kingdom k = init != null ? init.kingdom : null;
                 if (k == null && targ != null) k = targ.kingdom;
                 if (k == null) k = AnyKingdom();
-                if (k == null) { if (_projErr < 4) { _projErr++; ModLog.Warn("[PROJ] follower: no kingdom to own projectile — skipped"); } return; }
+                if (k == null) { if (_projErr < 4) { _projErr++; ModLog.Warn("[PROJ] follower: no kingdom to own projectile - skipped"); } return; }
                 _applyingProjectile = true;
                 World.world.projectiles.spawn(init, targ, m.AssetId,
                     new Vector3(m.LX, m.LY, 0f), new Vector3(m.TX, m.TY, 0f), m.TargetZ, m.StartZ, null, k);
@@ -992,7 +1138,7 @@ namespace WorldboxMP.Client.Mirror
         private readonly Dictionary<string, object> _animActionCache = new Dictionary<string, object>();
         private readonly Dictionary<string, object> _taskCache = new Dictionary<string, object>();
         private int _animLog, _animErr, _slashLog, _slashErr;
-        // Follower: apply the king's action-visual state. All pure render data — the follower's
+        // Follower: apply the king's action-visual state. All pure render data - the follower's
         // AI is suppressed, so nothing here executes logic:
         //  • ai.task  → the real shared task asset; hasTask()+force_hand_tool makes the
         //    hand-tool overlay (pickaxe/axe/hammer…) render = the visible job animation.
@@ -1052,8 +1198,7 @@ namespace WorldboxMP.Client.Mirror
             }
         }
 
-        // Only force animations this actor's sprite container actually has —
-        // calculateMainSprite indexes sprites[id] directly (KeyNotFound = render storm).
+        // Only force animations this actor's sprite container actually has - // calculateMainSprite indexes sprites[id] directly (KeyNotFound = render storm).
         private bool HasAnimSprite(Actor a, string animId)
         {
             try
@@ -1195,8 +1340,21 @@ namespace WorldboxMP.Client.Mirror
                     if (data == null) continue;
                     a.setData(data);
                     try { TraitTools.loadTraits(a, data.saved_traits); } catch { }   // force trait list to match king
-                    // Authoritative stats from the king (the follower can't derive them —
-                    // its genome/subspecies is incomplete). Apply BEFORE vitals so maxHealth is right.
+                    // Re-apply the live profession: setData only updates data.profession, not the
+                    // _profession field the renderer reads - so crowns/leader hats went stale on
+                    // followers. Only when changed (setProfession clears cached graphics), and with
+                    // pCancelBeh: false (no behavior side effects on the mirrored actor).
+                    try
+                    {
+                        if (_professionField != null && _setProfession != null)
+                        {
+                            var cur = _professionField.GetValue(a);
+                            if (!Equals(cur, data.profession))
+                                _setProfession.Invoke(a, new object[] { data.profession, false });
+                        }
+                    }
+                    catch (Exception pe) { if (_resyncErr < 5) { _resyncErr++; ModLog.Warn("ApplyActorResync profession: " + (pe.InnerException ?? pe).Message); } }
+                    // Authoritative stats from the king (the follower can't derive them - // its genome/subspecies is incomplete). Apply BEFORE vitals so maxHealth is right.
                     try { ApplyStats(a, JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, float>>(m.StatsJson)); } catch { }
                     try { a.setHealth(data.health, false); } catch { }
                     try { a.setNutrition(data.nutrition, false); } catch { }
@@ -1251,13 +1409,13 @@ namespace WorldboxMP.Client.Mirror
             if (!Active || !IsKing) return;
 
             // Sync ONLY the explicit pause (Config.paused = the pause button). The game's
-            // EFFECTIVE pause is `Config.paused || isWindowActive || ads` (decompiled) — so
+            // EFFECTIVE pause is `Config.paused || isWindowActive || ads` (decompiled) - so
             // opening a dialog/menu pauses the King via the SEPARATE isWindowActive term WITHOUT
             // setting Config.paused. Reading Config.paused therefore naturally excludes
             // dialog-pauses, so followers keep playing while the God King is in a menu.
             bool paused = SafePaused();
             string speed = SafeSpeedId();
-            // Broadcast on pause OR speed change — the follower runs a passive sim, so it
+            // Broadcast on pause OR speed change - the follower runs a passive sim, so it
             // must match the king's game speed (ticks/frame) or movement replays too slow.
             if (paused != _lastPaused || speed != _lastSpeedId)
             {
@@ -1280,7 +1438,7 @@ namespace WorldboxMP.Client.Mirror
                 _pendingSlashes.Clear();
             }
 
-            // Low-rate authoritative clock correction (single scalar — not position polling)
+            // Low-rate authoritative clock correction (single scalar - not position polling)
             // so the year/season/day stays locked across clients without drift.
             _timeTimer += dt;
             if (_timeTimer >= 4f)
@@ -1306,10 +1464,10 @@ namespace WorldboxMP.Client.Mirror
 
         // short_poll (100ms): action-visual diff scan. Followers suppress AI, so the king
         // streams what each actor is visibly DOING:
-        //  • task id  — drives the hand-tool overlay (pickaxe/axe/hammer/basket…), which IS
+        //  • task id  - drives the hand-tool overlay (pickaxe/axe/hammer/basket…), which IS
         //    the visible mine/chop/build/farm animation, plus the unit-window task text.
-        //  • forced animation id — rare (e.g. "burrow"), but it's the one true sprite override.
-        //  • jump — timer_jump_animation edge (combat lunge / task bounce); one-shot value,
+        //  • forced animation id - rare (e.g. "burrow"), but it's the one true sprite override.
+        //  • jump - timer_jump_animation edge (combat lunge / task bounce); one-shot value,
         //    decays naturally on the follower (updateParallelChecks runs in the passive sim).
         // Only CHANGES are sent, so steady state costs nothing.
         private struct AnimState { public string Anim; public string Task; public bool Jumping; }
@@ -1396,7 +1554,7 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn("SendActorResync failed: " + e.Message); }
         }
 
-        // long_poll (500ms): age — derived from world-time + age_overgrowth on the king; we
+        // long_poll (500ms): age - derived from world-time + age_overgrowth on the king; we
         // send the authoritative age so followers (whose passive sim doesn't age identically)
         // stay matched. Cheap (id+int per actor). Extend here for other ~2Hz scalars.
         private void SendLongPoll()
@@ -1468,7 +1626,7 @@ namespace WorldboxMP.Client.Mirror
 
         // Re-broadcast every live object of a manager (cities/kingdoms) via OnKingObject, which
         // save()s + serializes current state. Followers apply as an in-place update.
-        // NOTE: CityManager/KingdomManager : CoreSystemManager — they have NO getSimpleList
+        // NOTE: CityManager/KingdomManager : CoreSystemManager - they have NO getSimpleList
         // (that's on the ActorManager/BuildingManager hierarchy). They expose a public `list`
         // field (List<TObject>) and are IEnumerable. Enumerate via `list`.
         private void RefreshStructural(object mgr)
@@ -1477,7 +1635,7 @@ namespace WorldboxMP.Client.Mirror
             try
             {
                 // Enumerate the manager itself (CoreSystemManager.GetEnumerator -> _hashset), NOT
-                // its `list` field — `list` is rebuilt only by checkLists() in the game sim.
+                // its `list` field - `list` is rebuilt only by checkLists() in the game sim.
                 var listObj = mgr as System.Collections.IEnumerable;
                 if (listObj == null) { var lf = AccessTools.Field(mgr.GetType(), "list"); listObj = lf?.GetValue(mgr) as System.Collections.IEnumerable; }
                 if (listObj == null) { ModLog.Warn($"RefreshStructural: not enumerable {mgr.GetType().Name}"); return; }

@@ -3,7 +3,8 @@ using WorldboxMP.Shared.Protocol;
 
 namespace WorldboxMP.Client.Net
 {
-    /// <summary>Persisted server endpoint (editable in the settings dialog).</summary>
+    /// <summary>Server endpoint. Precedence: an endpoint the user explicitly saved in the
+    /// settings dialog (PlayerPrefs) > .env file > compile-time default (see EnvConfig).</summary>
     public static class ServerConfig
     {
         private const string HostKey = "wbmp_host";
@@ -11,13 +12,13 @@ namespace WorldboxMP.Client.Net
 
         public static string Host
         {
-            get => PlayerPrefs.GetString(HostKey, "127.0.0.1");
+            get => PlayerPrefs.HasKey(HostKey) ? PlayerPrefs.GetString(HostKey) : EnvConfig.Host;
             set { PlayerPrefs.SetString(HostKey, value); PlayerPrefs.Save(); }
         }
 
         public static int Port
         {
-            get => PlayerPrefs.GetInt(PortKey, NetProtocol.DefaultPort);
+            get => PlayerPrefs.HasKey(PortKey) ? PlayerPrefs.GetInt(PortKey) : EnvConfig.Port;
             set { PlayerPrefs.SetInt(PortKey, value); PlayerPrefs.Save(); }
         }
     }

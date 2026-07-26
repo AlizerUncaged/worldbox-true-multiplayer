@@ -16,6 +16,7 @@ packages/
 # Local secrets / config overrides
 appsettings.Local.json
 *.local.json
+.env
 
 # OS
 Thumbs.db

@@ -5,7 +5,7 @@ namespace WorldboxMP.Server.Rooms
 {
     /// <summary>
     /// Generates 4-character uppercase alphanumeric room ids (A-Z, 0-9).
-    /// 36^4 = 1,679,616 possible ids — far more than will ever be in use, so
+    /// 36^4 = 1,679,616 possible ids - far more than will ever be in use, so
     /// random generation with a collision retry in <see cref="RoomManager"/> is
     /// comfortably sufficient.
     /// </summary>

@@ -26,7 +26,7 @@ namespace WorldboxMP.Client.Dev
             if (_started) return;
             _started = true;
 
-            // 1) Log file FIRST — this survives a crash even if the console window closes.
+            // 1) Log file FIRST - this survives a crash even if the console window closes.
             // Multiple game instances share persistentDataPath, so a single fixed name
             // causes a "sharing violation" on the 2nd+ instance. Make it per-process and
             // open with FileShare.Read so the file is tail-able while we hold it.
@@ -36,7 +36,7 @@ namespace WorldboxMP.Client.Dev
                 LogPath = Path.Combine(Application.persistentDataPath, $"wbmp-client-{pid}.log");
                 var fs = new FileStream(LogPath, FileMode.Create, FileAccess.Write, FileShare.Read);
                 _file = new StreamWriter(fs, new UTF8Encoding(false)) { AutoFlush = true };
-                _file.WriteLine($"==== WorldBox Multiplayer client log — pid {pid} — {DateTime.Now} ====");
+                _file.WriteLine($"==== WorldBox Multiplayer client log - pid {pid} - {DateTime.Now} ====");
                 // Capture EVERYTHING (incl. uncaught exceptions) to the file.
                 Application.logMessageReceivedThreaded += OnUnityLog;
             }
@@ -48,7 +48,7 @@ namespace WorldboxMP.Client.Dev
                 if (GetConsoleWindow() == IntPtr.Zero) AllocConsole();
                 var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
                 Console.SetOut(stdout);
-                try { Console.Title = "WorldBox Multiplayer — debug"; } catch { }
+                try { Console.Title = "WorldBox Multiplayer - debug"; } catch { }
                 Console.WriteLine("================ WorldBox Multiplayer debug console ================");
                 Console.WriteLine("Log file: " + LogPath);
             }
@@ -57,7 +57,7 @@ namespace WorldboxMP.Client.Dev
 
         public static void SetTitle(string title)
         {
-            try { Console.Title = "WorldBox Multiplayer — " + title; } catch { }
+            try { Console.Title = "WorldBox Multiplayer - " + title; } catch { }
         }
 
         private static void OnUnityLog(string condition, string stackTrace, LogType type)

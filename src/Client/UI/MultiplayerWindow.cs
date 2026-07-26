@@ -27,7 +27,7 @@ namespace WorldboxMP.Client.UI
         private InputField _roomNameField, _roomPassField, _joinIdField, _joinPassField;
         private InputField _hostField, _portField;
         private Toggle _unlistedToggle;
-        private GameObject _roomListContainer, _rosterContainer, _logContainer;
+        private GameObject _roomListContainer, _rosterContainer;
         private bool _showSettings;
 
         // ── Static entry points (create lazily, then show) ──────────────────
@@ -155,13 +155,10 @@ namespace WorldboxMP.Client.UI
         {
             _roomPanel = UiKit.MakeColumn("RoomP", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
             var brow = UiKit.MakeRow("RTopRow", _roomPanel.transform);
-            UiKit.MakeButton("Logs", brow.transform, "Logs", () => Net.RequestLogs(), UiKit.ButtonGrey);
             UiKit.MakeButton("Resync", brow.transform, "Resync", () => Mirror.MirrorManager.Instance?.ForceSnapshotToAll(), UiKit.ButtonGrey);
             UiKit.MakeButton("Leave", brow.transform, "Leave", () => Net.LeaveRoom(), UiKit.ButtonRed);
             UiKit.MakeText("plh", _roomPanel.transform, "Players", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _rosterContainer = UiKit.MakeColumn("Roster", _roomPanel.transform, null, 3f, new RectOffset(0, 0, 0, 0));
-            UiKit.MakeText("lgh", _roomPanel.transform, "Logs", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
-            _logContainer = UiKit.MakeColumn("LogList", _roomPanel.transform, null, 1f, new RectOffset(0, 0, 0, 0));
         }
 
         private void BuildSettingsPanel()
@@ -195,7 +192,6 @@ namespace WorldboxMP.Client.UI
             Net.OnRoomError += m => Msg(m);
             Net.OnRosterChanged += Refresh;
             Net.OnRoomListChanged += RefreshRoomList;
-            Net.OnLogsChanged += RefreshLogs;
         }
 
         private void Msg(string m) { if (_msgText != null) _msgText.text = m ?? ""; }
@@ -246,34 +242,26 @@ namespace WorldboxMP.Client.UI
             ClearChildren(_rosterContainer);
             foreach (var p in Net.Roster)
             {
+                // Fixed-height row, vertically centered: name stretches, action buttons are
+                // compact fixed-width so they never balloon or sit off-line with the text.
                 var row = UiKit.MakeRow("p_" + p.Id4, _rosterContainer.transform, 4f);
+                var hl = row.GetComponent<HorizontalLayoutGroup>();
+                hl.childAlignment = TextAnchor.MiddleLeft;
+                hl.childForceExpandWidth = false;
+                UiKit.SetHeight(row, 26f);
                 string tag = ((RoomRole)p.Role) == RoomRole.King ? " \U0001F451 God King" : ((RoomRole)p.Role) == RoomRole.Admin ? " ★ Admin" : "";
                 bool isMe = p.Id4 == Net.Id4;
-                UiKit.MakeText("n", row.transform, p.Username + tag + (isMe ? " (you)" : ""), 12);
+                var nameText = UiKit.MakeText("n", row.transform, p.Username + tag + (isMe ? " (you)" : ""), 12);
+                var nle = nameText.gameObject.AddComponent<LayoutElement>();
+                nle.flexibleWidth = 1f;   // name takes the slack; buttons keep their size
                 if (Net.IsAdmin && !isMe)
                 {
-                    UiKit.MakeButton("kick", row.transform, "Kick", () => Net.Kick(p.Id4), UiKit.ButtonRed, 11)
-                        .GetComponent<LayoutElement>().preferredWidth = 46;
+                    UiKit.MakeButton("kick", row.transform, "Kick", () => Net.Kick(p.Id4), UiKit.ButtonRed, 11, 22f, 48f);
                     if (Net.IsKing && (RoomRole)p.Role == RoomRole.Player)
-                        UiKit.MakeButton("prom", row.transform, "+", () => Net.Promote(p.Id4), UiKit.ButtonGrey, 11)
-                            .GetComponent<LayoutElement>().preferredWidth = 28;
+                        UiKit.MakeButton("prom", row.transform, "+", () => Net.Promote(p.Id4), UiKit.ButtonGrey, 11, 22f, 26f);
                     if (Net.IsKing && (RoomRole)p.Role == RoomRole.Admin)
-                        UiKit.MakeButton("dem", row.transform, "-", () => Net.Demote(p.Id4), UiKit.ButtonGrey, 11)
-                            .GetComponent<LayoutElement>().preferredWidth = 28;
+                        UiKit.MakeButton("dem", row.transform, "-", () => Net.Demote(p.Id4), UiKit.ButtonGrey, 11, 22f, 26f);
                 }
-            }
-        }
-
-        private void RefreshLogs()
-        {
-            if (_logContainer == null) return;
-            ClearChildren(_logContainer);
-            int start = Mathf.Max(0, Net.Logs.Count - 12);
-            for (int i = start; i < Net.Logs.Count; i++)
-            {
-                var e = Net.Logs[i];
-                var time = DateTimeOffset.FromUnixTimeMilliseconds(e.UnixMs).LocalDateTime.ToString("HH:mm:ss");
-                UiKit.MakeText("log" + i, _logContainer.transform, $"{time}  {e.Text}", 10, TextAnchor.MiddleLeft);
             }
         }
 

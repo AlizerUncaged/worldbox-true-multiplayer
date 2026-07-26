@@ -22,7 +22,7 @@ namespace WorldboxMP.Server.Data
             Players = Db.GetCollection<PlayerRecord>("players");
         }
 
-        /// <summary>Create indexes (non-fatal — logs and continues if it can't).</summary>
+        /// <summary>Create indexes (non-fatal - logs and continues if it can't).</summary>
         public void EnsureIndexes()
         {
             try
