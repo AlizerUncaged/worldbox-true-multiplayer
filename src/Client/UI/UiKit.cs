@@ -168,6 +168,88 @@ namespace WorldboxMP.Client.UI
             else le.flexibleWidth = 1f;
         }
 
+        /// <summary>Square native pixel button with a CUSTOM ICON and a small caption
+        /// underneath - the style of the game's Other window (Settings/Languages).
+        /// Returns the Button; the whole column is button + caption.</summary>
+        public static Button MakeIconButton(string name, Transform parent, string caption,
+            Sprite icon, System.Action onClick, float size = 44f)
+        {
+            var col = MakeRect(name, parent);
+            var v = col.AddComponent<VerticalLayoutGroup>();
+            v.spacing = 2f; v.padding = new RectOffset(0, 0, 0, 0);
+            v.childControlWidth = false; v.childControlHeight = false;
+            v.childForceExpandWidth = false; v.childForceExpandHeight = false;
+            v.childAlignment = TextAnchor.UpperCenter;
+            var cle = col.AddComponent<LayoutElement>();
+            cle.minWidth = size + 36f; cle.preferredWidth = size + 36f;
+            cle.minHeight = size + 20f; cle.preferredHeight = size + 20f;
+            cle.flexibleWidth = 0f;
+
+            Button btn = null;
+            var tmpl = GetNativeButtonTemplate();
+            if (tmpl != null)
+            {
+                try
+                {
+                    var go = Object.Instantiate(tmpl, col.transform);
+                    go.name = name + "_btn";
+                    go.SetActive(true);
+                    btn = go.GetComponent<Button>();
+                    var img = go.GetComponent<Image>();
+                    if (btn != null && img != null)
+                    {
+                        img.type = Image.Type.Sliced;   // keep the pixel frame crisp at square size
+                        btn.targetGraphic = img;
+                        btn.onClick.RemoveAllListeners();
+                        if (onClick != null) btn.onClick.AddListener(() => onClick());
+                        // KEEP the native Icon child and swap in our sprite (unlike MakeButton,
+                        // which hides it for a text label).
+                        var iconTr = FindDeep(go.transform, "Icon");
+                        if (iconTr != null)
+                        {
+                            iconTr.gameObject.SetActive(true);
+                            var ii = iconTr.GetComponent<Image>();
+                            if (ii != null) { ii.sprite = icon; ii.overrideSprite = icon; ii.preserveAspect = true; }
+                        }
+                        var txt = go.GetComponentInChildren<Text>(true);
+                        if (txt != null && txt.transform != go.transform) txt.gameObject.SetActive(false);
+                        var rt = (RectTransform)go.transform;
+                        rt.sizeDelta = new Vector2(size, size);
+                        var ble = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
+                        ble.minWidth = size; ble.preferredWidth = size;
+                        ble.minHeight = size; ble.preferredHeight = size; ble.flexibleWidth = 0f;
+                    }
+                    else { Object.Destroy(go); btn = null; }
+                }
+                catch (System.Exception e) { ModLog.Warn("[UI] icon button clone failed: " + e.Message); btn = null; }
+            }
+            if (btn == null)
+            {
+                // Fallback: flat square with the icon on top.
+                var go = MakeRect(name + "_btn", col.transform);
+                var img = go.AddComponent<Image>();
+                img.color = ButtonGrey;
+                btn = go.AddComponent<Button>();
+                btn.targetGraphic = img;
+                if (onClick != null) btn.onClick.AddListener(() => onClick());
+                var icGo = MakeRect(name + "_ic", go.transform);
+                var irt = (RectTransform)icGo.transform;
+                irt.anchorMin = Vector2.zero; irt.anchorMax = Vector2.one;
+                irt.offsetMin = new Vector2(4, 4); irt.offsetMax = new Vector2(-4, -4);
+                var ic = icGo.AddComponent<Image>();
+                ic.sprite = icon; ic.preserveAspect = true; ic.raycastTarget = false;
+                var ble = go.AddComponent<LayoutElement>();
+                ble.minWidth = size; ble.preferredWidth = size;
+                ble.minHeight = size; ble.preferredHeight = size;
+            }
+
+            var cap = MakeText(name + "_cap", col.transform, caption, 11, TextAnchor.UpperCenter, FontStyle.Bold, Orange);
+            var caprt = cap.rectTransform;
+            caprt.sizeDelta = new Vector2(size + 36f, 16f);
+            cap.horizontalOverflow = HorizontalWrapMode.Overflow;
+            return btn;
+        }
+
         /// <summary>Hand-built flat button - used only if the native clone is unavailable.</summary>
         public static Button MakeButtonFallback(string name, Transform parent, string label,
             System.Action onClick, Color? color = null, int fontSize = 13,

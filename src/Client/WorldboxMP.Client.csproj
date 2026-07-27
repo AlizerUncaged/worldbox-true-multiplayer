@@ -112,6 +112,12 @@
     <EmbeddedResource Include="Resources\settings-icon.png">
       <LogicalName>settings-icon.png</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Resources\create-room-icon.png">
+      <LogicalName>create-room-icon.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\join-room-icon.png">
+      <LogicalName>join-room-icon.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- Debug auto-deploy: copy the WHOLE client output (Client + Shared + LiteNetLib +

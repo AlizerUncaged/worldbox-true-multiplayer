@@ -37,25 +37,36 @@ namespace WorldboxMP.Client.UI
             {
                 var tabIcon = IconFactory.GetEmbedded("multiplayer-header-icon.png")
                               ?? IconFactory.Get("mp_tab", new Color(0.30f, 0.55f, 0.95f));
+                // The tab name/description are locale keys - register them so the
+                // LocalizedTextManager stops logging missing-text errors on hover.
+                try
+                {
+                    LM.AddToCurrentLocale("True Multiplayer", "True Multiplayer");
+                    LM.AddToCurrentLocale("Play with other gods like yourself", "Play with other gods like yourself");
+                }
+                catch { }
                 var tab = TabManager.CreateTab(TabId, "True Multiplayer", "Play with other gods like yourself", tabIcon);
                 EnlargeTabIcon(tabIcon, 2f);
 
                 // Account / login - always available.
-                AddButton("wbmp_login", "Account / login",
+                AddButton("wbmp_login", "Multiplayer",
                     IconFactory.GetEmbedded("login-icon.png") ?? IconFactory.Get("wbmp_login", new Color(0.30f, 0.55f, 0.95f)),
-                    tab, AlwaysOn, MultiplayerWindow.Open);
+                    tab, AlwaysOn, MultiplayerWindow.Open,
+                    description: "Log in, create a room, or join other gods");
 
                 // Players - needs to be in a room.
-                AddButton("wbmp_players", "Players in the current room",
+                AddButton("wbmp_players", "Players",
                     IconFactory.GetEmbedded("player-list-icon.png") ?? IconFactory.Get("wbmp_players", new Color(0.35f, 0.75f, 0.45f)),
-                    tab, InRoom, MultiplayerWindow.Open);
+                    tab, InRoom, MultiplayerWindow.Open,
+                    description: "Everyone in the current room");
 
                 // Settings (server address) - redundant once connected, so it hides then
                 // and reappears if the connection drops.
                 AddButton("wbmp_settings", "Server settings",
                     IconFactory.GetEmbedded("settings-icon.png") ?? IconFactory.Get("wbmp_settings", new Color(0.55f, 0.55f, 0.60f)),
                     tab, AlwaysOn, MultiplayerWindow.OpenSettings,
-                    visible: () => Net == null || Net.State != WorldboxMP.Client.Net.ConnState.Connected);
+                    visible: () => Net == null || Net.State != WorldboxMP.Client.Net.ConnState.Connected,
+                    description: "Change the server address");
 
                 Subscribe();
                 RefreshButtons();
@@ -79,7 +90,7 @@ namespace WorldboxMP.Client.UI
             return "Not available right now.";
         }
 
-        private static void AddButton(string id, string tip, Sprite icon, PowersTab tab, Func<bool> enabled, Action action, Func<bool> visible = null)
+        private static void AddButton(string id, string tip, Sprite icon, PowersTab tab, Func<bool> enabled, Action action, Func<bool> visible = null, string description = null)
         {
             var btn = PowerButtonCreator.CreateSimpleButton(id, () =>
             {
@@ -87,6 +98,15 @@ namespace WorldboxMP.Client.UI
                 else { try { WorldTip.showNow(BlockedReason(), false, "top", 3f); } catch { } }
             }, icon);
             PowerButtonCreator.AddButtonToTab(btn, tab);
+            // Native hover tooltips: PowerButton (no godPower) resolves locale keys from the
+            // button NAME - "<id>" for the title and "<id>_description" for the second line -
+            // so registering strings under those keys is all it takes.
+            try
+            {
+                LM.AddToCurrentLocale(id, tip);
+                if (!string.IsNullOrEmpty(description)) LM.AddToCurrentLocale(id + "_description", description);
+            }
+            catch (Exception e) { ModLog.Warn("tooltip locale failed: " + e.Message); }
 
             Image iconImg = null;
             foreach (var img in btn.GetComponentsInChildren<Image>(true))

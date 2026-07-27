@@ -22,7 +22,7 @@ namespace WorldboxMP.Client.UI
         private Transform _host;
 
         private Text _statusText, _msgText;
-        private GameObject _loginPanel, _lobbyPanel, _roomPanel, _settingsPanel;
+        private GameObject _loginPanel, _lobbyPanel, _createPanel, _joinPanel, _roomPanel, _settingsPanel;
         private InputField _userField, _passField;
         private InputField _roomNameField, _roomPassField, _joinIdField, _joinPassField;
         private InputField _hostField, _portField;
@@ -30,12 +30,20 @@ namespace WorldboxMP.Client.UI
         private GameObject _roomListContainer, _rosterContainer;
         private bool _showSettings;
 
+        // Nested lobby: the door opens a MENU (two square icon buttons + public rooms);
+        // Create / Join each live on their own sub-panel with a Back button.
+        private enum LobbyView { Menu, Create, Join }
+        private LobbyView _lobbyView = LobbyView.Menu;
+
         // ── Static entry points (create lazily, then show) ──────────────────
         public static void Ensure() { /* creation is lazy on first Open */ }
 
         private static void Create()
         {
             if (_created) return;
+            // NML uses the title as a locale key; register it so LocalizedTextManager
+            // stops logging "missing text: WorldBox Multiplayer" on every open.
+            try { NeoModLoader.General.LM.AddToCurrentLocale("WorldBox Multiplayer", "WorldBox Multiplayer"); } catch { }
             CreateWindow(WindowId, "WorldBox Multiplayer");
             _created = true;
         }
@@ -46,7 +54,11 @@ namespace WorldboxMP.Client.UI
         public static void Open()
         {
             Create();
-            if (Instance != null) Instance._showSettings = false;   // main buttons always show the normal panels
+            if (Instance != null)
+            {
+                Instance._showSettings = false;      // main buttons always show the normal panels
+                Instance._lobbyView = LobbyView.Menu; // and the lobby starts at its menu
+            }
             ScrollWindow.showWindow(WindowId);
             if (Instance != null) { Instance.Refresh(); if (NetClient.Instance.LoggedIn) NetClient.Instance.RequestRoomList(); }
         }
@@ -96,6 +108,8 @@ namespace WorldboxMP.Client.UI
 
             BuildLoginPanel();
             BuildLobbyPanel();
+            BuildCreatePanel();
+            BuildJoinPanel();
             BuildRoomPanel();
             BuildSettingsPanel();
             WireNet();
@@ -120,35 +134,60 @@ namespace WorldboxMP.Client.UI
                 "Register: pick a username + password.", 11, TextAnchor.MiddleLeft, FontStyle.Italic);
         }
 
+        // Lobby MENU: two square icon buttons (native Other-window style) + public rooms.
         private void BuildLobbyPanel()
         {
             _lobbyPanel = UiKit.MakeColumn("Lobby", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
 
-            UiKit.MakeText("ch", _lobbyPanel.transform, "Create a room", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
-            _roomNameField = UiKit.MakeInput("RName", _lobbyPanel.transform, "Room name", false, 40);
-            _roomPassField = UiKit.MakeInput("RPass", _lobbyPanel.transform, "Password (optional, max 16)", false, 16);
-            var trow = UiKit.MakeRow("TRow", _lobbyPanel.transform);
+            var brow = UiKit.MakeRow("MenuRow", _lobbyPanel.transform, 14f);
+            var bh = brow.GetComponent<HorizontalLayoutGroup>();
+            bh.childForceExpandWidth = false;
+            bh.childAlignment = TextAnchor.MiddleCenter;
+            UiKit.SetHeight(brow, 68f);
+            UiKit.MakeIconButton("CreateRoomBtn", brow.transform, "Create a room",
+                IconFactory.GetEmbedded("create-room-icon.png"),
+                () => { _lobbyView = LobbyView.Create; Refresh(); });
+            UiKit.MakeIconButton("JoinRoomBtn", brow.transform, "Join by code",
+                IconFactory.GetEmbedded("join-room-icon.png"),
+                () => { _lobbyView = LobbyView.Join; Refresh(); });
+
+            var lrow = UiKit.MakeRow("LRow", _lobbyPanel.transform);
+            UiKit.MakeText("ph", lrow.transform, "Public rooms", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
+            UiKit.MakeButton("Refresh", lrow.transform, "Refresh", () => Net.RequestRoomList(), UiKit.ButtonGrey, 12, 24f, 80f);
+            _roomListContainer = UiKit.MakeColumn("RoomList", _lobbyPanel.transform, null, 3f, new RectOffset(0, 0, 0, 0));
+        }
+
+        private void BuildCreatePanel()
+        {
+            _createPanel = UiKit.MakeColumn("CreateP", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
+            UiKit.MakeText("ch", _createPanel.transform, "Create a room", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
+            _roomNameField = UiKit.MakeInput("RName", _createPanel.transform, "Room name", false, 40);
+            _roomPassField = UiKit.MakeInput("RPass", _createPanel.transform, "Password (optional, max 16)", false, 16);
+            var trow = UiKit.MakeRow("TRow", _createPanel.transform);
             var togGo = UiKit.MakeRect("UnlistedTog", trow.transform);
             _unlistedToggle = togGo.AddComponent<Toggle>();
             var togBg = togGo.AddComponent<Image>(); togBg.color = UiKit.InputBg;
             _unlistedToggle.targetGraphic = togBg;
             UiKit.SetHeight(togGo, 24f);
             UiKit.MakeText("TogLbl", trow.transform, "Unlisted", 12);
-            UiKit.MakeButton("CreateBtn", _lobbyPanel.transform, "Create Room", () =>
+            UiKit.MakeButton("CreateBtn", _createPanel.transform, "Create Room", () =>
                 Net.CreateRoom(_roomNameField.text, _roomPassField.text,
                     _unlistedToggle.isOn ? RoomVisibility.Unlisted : RoomVisibility.Public), UiKit.ButtonRed);
+            UiKit.MakeButton("CreateBack", _createPanel.transform, "Back",
+                () => { _lobbyView = LobbyView.Menu; Refresh(); }, UiKit.ButtonGrey);
+        }
 
-            UiKit.MakeText("jh", _lobbyPanel.transform, "Join by code", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
-            var jrow = UiKit.MakeRow("JRow", _lobbyPanel.transform);
+        private void BuildJoinPanel()
+        {
+            _joinPanel = UiKit.MakeColumn("JoinP", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
+            UiKit.MakeText("jh", _joinPanel.transform, "Join by code", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
+            var jrow = UiKit.MakeRow("JRow", _joinPanel.transform);
             _joinIdField = UiKit.MakeInput("JId", jrow.transform, "CODE", false, 4);
             _joinPassField = UiKit.MakeInput("JPass", jrow.transform, "Password", false, 16);
-            UiKit.MakeButton("JoinBtn", _lobbyPanel.transform, "Join Room",
-                () => Net.JoinRoom(_joinIdField.text.ToUpperInvariant(), _joinPassField.text), UiKit.ButtonGrey);
-
-            var lrow = UiKit.MakeRow("LRow", _lobbyPanel.transform);
-            UiKit.MakeText("ph", lrow.transform, "Public rooms", 14, TextAnchor.MiddleLeft, FontStyle.Bold);
-            UiKit.MakeButton("Refresh", lrow.transform, "Refresh", () => Net.RequestRoomList(), UiKit.ButtonGrey);
-            _roomListContainer = UiKit.MakeColumn("RoomList", _lobbyPanel.transform, null, 3f, new RectOffset(0, 0, 0, 0));
+            UiKit.MakeButton("JoinBtn", _joinPanel.transform, "Join Room",
+                () => Net.JoinRoom(_joinIdField.text.ToUpperInvariant(), _joinPassField.text), UiKit.ButtonRed);
+            UiKit.MakeButton("JoinBack", _joinPanel.transform, "Back",
+                () => { _lobbyView = LobbyView.Menu; Refresh(); }, UiKit.ButtonGrey);
         }
 
         private void BuildRoomPanel()
@@ -207,7 +246,8 @@ namespace WorldboxMP.Client.UI
 
             if (_settingsPanel != null && _showSettings)
             {
-                _loginPanel.SetActive(false); _lobbyPanel.SetActive(false); _roomPanel.SetActive(false);
+                _loginPanel.SetActive(false); _lobbyPanel.SetActive(false);
+                _createPanel.SetActive(false); _joinPanel.SetActive(false); _roomPanel.SetActive(false);
                 _settingsPanel.SetActive(true);
                 return;
             }
@@ -215,8 +255,12 @@ namespace WorldboxMP.Client.UI
 
             bool loggedIn = Net.LoggedIn;
             bool inRoom = Net.InRoom;
+            bool lobby = loggedIn && !inRoom;
+            if (!lobby) _lobbyView = LobbyView.Menu;   // leaving/joining resets the nesting
             _loginPanel.SetActive(!loggedIn);
-            _lobbyPanel.SetActive(loggedIn && !inRoom);
+            _lobbyPanel.SetActive(lobby && _lobbyView == LobbyView.Menu);
+            _createPanel.SetActive(lobby && _lobbyView == LobbyView.Create);
+            _joinPanel.SetActive(lobby && _lobbyView == LobbyView.Join);
             _roomPanel.SetActive(loggedIn && inRoom);
 
             if (inRoom) RefreshRoster();
@@ -230,7 +274,11 @@ namespace WorldboxMP.Client.UI
                 UiKit.MakeText("empty", _roomListContainer.transform, "(no public rooms)", 11, TextAnchor.MiddleLeft, FontStyle.Italic);
             foreach (var r in Net.RoomList)
             {
-                string code = r.ShareableId, label = $"{r.Name}  [{code}]  {r.PlayerCount}p{(r.HasPassword ? " \U0001F512" : "")}";
+                // "[name max 10 chars] - [N] players" - the code is join plumbing, never shown.
+                string code = r.ShareableId;
+                string name = string.IsNullOrWhiteSpace(r.Name) ? "room" : r.Name.Trim();
+                if (name.Length > 10) name = name.Substring(0, 10);
+                string label = $"{name} - {r.PlayerCount} player{(r.PlayerCount == 1 ? "" : "s")}";
                 UiKit.MakeButton("room_" + code, _roomListContainer.transform, label,
                     () => Net.JoinRoom(code, _joinPassField != null ? _joinPassField.text : ""), UiKit.ButtonGrey, 12);
             }
