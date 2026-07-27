@@ -9,12 +9,11 @@ using UnityEngine;
 namespace WorldboxMP.Client.UI
 {
     /// <summary>
-    /// Hidden easter egg: type "its all ogre now" anywhere in-game to summon real 3D glTF models
+    /// Hidden easter egg: type "its all ogre now" anywhere in-game to summon a real 3D glTF model
     /// rendered over WorldBox's 2D world via a dedicated overlay camera on an unused layer:
-    ///   - nanally.glb : centered turntable spin (Genshin-ish light rig).
-    ///   - shrek.glb   : chaotic, fast DVD-screensaver bounce around the whole screen.
-    /// Click a model to dismiss it; dismissing the last one tears the whole rig down and frees the
-    /// ~60MB of textures/meshes. Nothing is loaded until summoned, so idle cost is just a tiny
+    ///   - shrek.glb : chaotic, fast DVD-screensaver bounce around the whole screen.
+    /// Click the model to dismiss it; dismissing the last one tears the whole rig down and frees
+    /// the textures/meshes. Nothing is loaded until summoned, so idle cost is just a tiny
     /// per-frame phrase check.
     /// </summary>
     public class Model3D : MonoBehaviour
@@ -134,13 +133,6 @@ namespace WorldboxMP.Client.UI
             try
             {
                 SetupCameraAndLights();
-
-                var n = LoadModel("nanally.glb", 2.0f, playAnim: true);
-                if (n != null)
-                {
-                    n.transform.position = Vector3.zero;
-                    _entries.Add(new Entry { pivot = n, beh = Beh.Turntable });
-                }
 
                 var s = LoadModel("shrek.glb", 1.1f, playAnim: false);
                 if (s != null)
