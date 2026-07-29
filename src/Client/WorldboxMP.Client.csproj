@@ -142,7 +142,9 @@
        debugging user crash reports) stays in bin\Release\obfuscated. -->
   <Target Name="ObfuscateAndPublish" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
-      <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish</PublishModDir>
+      <!-- Each ship build lands in its own dated folder: bin\Publish\YYYY-MM-DD-HHmmss -->
+      <PublishStamp>$([System.DateTime]::Now.ToString("yyyy-MM-dd-HHmmss"))</PublishStamp>
+      <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish\$(PublishStamp)</PublishModDir>
     </PropertyGroup>
     <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." />
     <Exec Command="dotnet tool run obfuscar.console &quot;$(MSBuildProjectDirectory)\obfuscar.xml&quot;" WorkingDirectory="$(TargetDir)" />
