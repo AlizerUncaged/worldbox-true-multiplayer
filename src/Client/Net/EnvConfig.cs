@@ -17,8 +17,10 @@ namespace WorldboxMP.Client.Net
     {
 #if DEBUG
         private const string DefaultHost = "127.0.0.1";        // dev: local server
+        private const int DefaultPort = Shared.Protocol.NetProtocol.DefaultPort;   // 40441
 #else
         private const string DefaultHost = "old-server.example.invalid";   // release: public server
+        private const int DefaultPort = 9191;                  // public server port (run_server.sh)
 #endif
 
         private static bool _loaded;
@@ -33,7 +35,7 @@ namespace WorldboxMP.Client.Net
             if (_loaded) return;
             _loaded = true;
             _host = DefaultHost;
-            _port = Shared.Protocol.NetProtocol.DefaultPort;
+            _port = DefaultPort;
 
             var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var path in CandidatePaths())
