@@ -135,4 +135,29 @@
     <Message Importance="high" Text="[WBMP] Deployed client -> $(DeployDir)" />
   </Target>
 
+  <!-- Release ship pipeline: obfuscate the client DLL (Obfuscar, config in
+       obfuscar.xml - it protects every name-based runtime lookup) and assemble a
+       ready-to-ship mod folder in bin\Publish: obfuscated client + Shared +
+       LiteNetLib + mod.json + runtime assets. Mapping.txt (rename map for
+       debugging user crash reports) stays in bin\Release\obfuscated. -->
+  <Target Name="ObfuscateAndPublish" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish</PublishModDir>
+    </PropertyGroup>
+    <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." />
+    <Exec Command="dotnet tool run obfuscar.console &quot;$(MSBuildProjectDirectory)\obfuscar.xml&quot;" WorkingDirectory="$(TargetDir)" />
+    <ItemGroup>
+      <_ShipDlls Include="$(TargetDir)obfuscated\WorldboxMP.Client.dll" />
+      <_ShipDlls Include="$(TargetDir)WorldboxMP.Shared.dll" />
+      <_ShipDlls Include="$(TargetDir)LiteNetLib.dll" />
+      <_ShipFiles Include="$(OutDir)mod.json" Condition="Exists('$(OutDir)mod.json')" />
+      <_ShipGlb Include="$(MSBuildProjectDirectory)\Assets3D\*.glb" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishModDir)" />
+    <Copy SourceFiles="@(_ShipDlls)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="@(_ShipFiles)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="@(_ShipGlb)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="[WBMP] Obfuscated ship build -> $(PublishModDir)" />
+  </Target>
+
 </Project>
