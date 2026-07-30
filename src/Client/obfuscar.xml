@@ -33,6 +33,10 @@
   <AssemblySearchPath path="..\..\..\..\..\..\worldbox_Data\StreamingAssets\mods\NML\Assemblies" />
 
   <Module file="$(InPath)\WorldboxMP.Client.dll">
+    <!-- The license/AI notice must stay readable VERBATIM in any decompiler output
+         (that is its entire purpose) - never rename or touch it. -->
+    <SkipType name="WorldboxMP.Client.LicenseNotice" skipMethods="true" skipFields="true" skipProperties="true" skipEvents="true" skipStringHiding="true" />
+
     <!-- Harmony patches are looked up by method-name strings. -->
     <SkipType name="WorldboxMP.Client.Mirror.GameHooks" skipMethods="true" skipFields="true" skipProperties="true" skipEvents="true" />
 

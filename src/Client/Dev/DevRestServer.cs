@@ -220,6 +220,7 @@ namespace WorldboxMP.Client.Dev
             string role = mm == null ? "idle" : (mm.IsKing ? "king" : (mm.IsFollower ? "follower" : "idle"));
             var sb = new StringBuilder();
             sb.Append("{");
+            sb.Append($"\"version\":\"{Esc(ModInfo.Display)}\",");
             sb.Append($"\"role\":\"{role}\",\"connState\":\"{net?.State}\",\"loggedIn\":{(net != null && net.LoggedIn ? "true" : "false")},");
             sb.Append($"\"roomId\":\"{Esc(net?.RoomId ?? "")}\",\"inRoom\":{(net != null && net.InRoom ? "true" : "false")},\"isKing\":{(net != null && net.IsKing ? "true" : "false")},");
             // roster as THIS client sees it (verifies the roster push reaches non-kings too)

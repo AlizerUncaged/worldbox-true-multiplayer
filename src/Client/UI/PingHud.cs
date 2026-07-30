@@ -46,11 +46,11 @@ namespace WorldboxMP.Client.UI
 
             // Anchor to the top-right corner with a small margin; pivot top-right so the
             // box hugs the corner while the text inside flows left-aligned. Wide enough
-            // for "D 1,023.9 MB  U 1,023.9 MB  |  ping 999 ms".
+            // for "beta-0.1.0  |  D 1,023.9 MB  U 1,023.9 MB  |  ping 999 ms".
             var rt = _label.rectTransform;
             rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
             rt.pivot = new Vector2(1f, 1f);
-            rt.sizeDelta = new Vector2(340f, 20f);
+            rt.sizeDelta = new Vector2(440f, 20f);
             rt.anchoredPosition = new Vector2(-10f, -8f);
 
             // Centered "God King paused" banner (top-center), shown only on followers while the
@@ -86,9 +86,11 @@ namespace WorldboxMP.Client.UI
 
             if (!_visible) { _label.text = ""; return; }
 
+            string ver = ModInfo.Display;   // e.g. "beta-0.1.0"
+
             if (net == null || net.State != ConnState.Connected)
             {
-                _label.text = "ping --";
+                _label.text = ver + "  |  ping --";
                 _label.color = new Color(1f, 1f, 1f, 0.5f);
                 return;
             }
@@ -97,11 +99,11 @@ namespace WorldboxMP.Client.UI
             string traffic = $"D {fmt.SizeSuffix(net.BytesReceived)}  U {fmt.SizeSuffix(net.BytesSent)}";
 
             int ms = net.TransportRttMs;
-            if (ms < 0) { _label.text = traffic + "  |  ping --"; _label.color = new Color(1f, 1f, 1f, 0.6f); return; }
+            if (ms < 0) { _label.text = ver + "  |  " + traffic + "  |  ping --"; _label.color = new Color(1f, 1f, 1f, 0.6f); return; }
 
             // green < 80ms, yellow < 160ms, red otherwise.
             _label.color = ms < 80 ? new Color(0.5f, 1f, 0.5f) : (ms < 160 ? new Color(1f, 0.9f, 0.4f) : new Color(1f, 0.5f, 0.5f));
-            _label.text = traffic + "  |  ping " + ms + " ms";
+            _label.text = ver + "  |  " + traffic + "  |  ping " + ms + " ms";
         }
     }
 }

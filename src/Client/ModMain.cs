@@ -22,7 +22,8 @@ namespace WorldboxMP.Client
 #if DEBUG
             Dev.DevConsole.Start();
 #endif
-            ModLog.Info($"Loading WorldBox Multiplayer v{GetDeclaration().Version}...");
+            try { ModInfo.Version = GetDeclaration()?.Version ?? ModInfo.Version; } catch { }
+            ModLog.Info($"Loading WorldBox Multiplayer {ModInfo.Display}...");
 
             // The mod's folder on disk (used to find optional icon PNGs). NML loads
             // compiled mods from memory, so Assembly.Location is empty - use the

@@ -11,6 +11,11 @@
     <!-- Copy NuGet deps (LiteNetLib) + the Shared dll into output for deployment. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
 
+    <!-- Release channel, single-sourced: baked into the assembly as metadata (read by
+         ModInfo for the HUD version badge) AND used in the bin\Publish folder name.
+         Flip to "release" (or clear) when we leave beta. -->
+    <ReleaseChannel>beta</ReleaseChannel>
+
     <!-- WorldBox install root: Projects/Worldbox-Multiplayer/src/Client -> up 4. -->
     <GameDir>$(MSBuildProjectDirectory)\..\..\..\..</GameDir>
     <ManagedDir>$(GameDir)\worldbox_Data\Managed</ManagedDir>
@@ -23,6 +28,10 @@
     <Reference Include="mscorlib" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="ReleaseChannel" Value="$(ReleaseChannel)" />
   </ItemGroup>
 
   <!-- Game / modloader assemblies (compile-only; not copied) -->
@@ -142,9 +151,10 @@
        debugging user crash reports) stays in bin\Release\obfuscated. -->
   <Target Name="ObfuscateAndPublish" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
-      <!-- Each ship build lands in its own dated folder: bin\Publish\YYYY-MM-DD-HHmmss -->
+      <!-- Each ship build lands in its own channel+dated folder:
+           bin\Publish\beta-YYYY-MM-DD-HHmmss -->
       <PublishStamp>$([System.DateTime]::Now.ToString("yyyy-MM-dd-HHmmss"))</PublishStamp>
-      <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish\$(PublishStamp)</PublishModDir>
+      <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish\$(ReleaseChannel)-$(PublishStamp)</PublishModDir>
     </PropertyGroup>
     <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." />
     <Exec Command="dotnet tool run obfuscar.console &quot;$(MSBuildProjectDirectory)\obfuscar.xml&quot;" WorkingDirectory="$(TargetDir)" />
