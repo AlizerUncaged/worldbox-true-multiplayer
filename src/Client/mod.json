@@ -1,7 +1,7 @@
 {
     "name": "WorldBox Multiplayer",
     "author": "ALIZER",
-    "version": "0.1.0",
+    "version": "2026.07.30.0000",
     "description": "Real-time multiplayer for WorldBox: shared worlds, rooms, and live mirroring.",
     "ModType": "COMPILED_NEOMOD",
     "Dependencies": [],

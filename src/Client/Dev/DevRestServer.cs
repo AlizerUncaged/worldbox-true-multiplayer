@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.UI;
 using WorldboxMP.Client.Net;
 using WorldboxMP.Shared.Protocol;
 using WorldboxMP.Client.Mirror;
@@ -172,6 +173,131 @@ namespace WorldboxMP.Client.Dev
                             }
                         sbr.Append("]}");
                         return sbr.ToString();
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "uiprobe":
+                    // Diagnose input-field focusability: state flags, what a raycast at the
+                    // field's center actually hits, and whether the EventSystem accepts AND
+                    // keeps the selection (call twice: second call shows if focus stuck).
+                    try
+                    {
+                        var sbp = new StringBuilder("{\"fields\":[");
+                        int fi = 0;
+                        foreach (var inp in Resources.FindObjectsOfTypeAll<InputField>())
+                        {
+                            if (inp == null || !inp.gameObject.scene.IsValid()) continue;
+                            // The named GameObject is the cloned NameInputElement ROOT; the
+                            // InputField component sits on an inner child - match ancestors.
+                            string nm = null;
+                            var walk = inp.transform;
+                            for (int up = 0; up < 5 && walk != null && nm == null; up++, walk = walk.parent)
+                            {
+                                string wn = walk.gameObject.name;
+                                if (wn == "User" || wn == "Pass" || wn == "RName" || wn == "RPass" || wn == "JId" || wn == "JPass" || wn == "Host" || wn == "Port") nm = wn;
+                            }
+                            if (nm == null) continue;
+                            bool cgOk = true;
+                            foreach (var cg in inp.GetComponentsInParent<CanvasGroup>(true))
+                                if (!cg.interactable || !cg.blocksRaycasts) cgOk = false;
+                            string top = "";
+                            try
+                            {
+                                var rt2 = (RectTransform)inp.transform;
+                                var corners = new Vector3[4]; rt2.GetWorldCorners(corners);
+                                var center = (corners[0] + corners[2]) / 2f;
+                                var cv = inp.GetComponentInParent<Canvas>();
+                                Vector2 screen = RectTransformUtility.WorldToScreenPoint(
+                                    cv != null && cv.renderMode != RenderMode.ScreenSpaceOverlay ? cv.worldCamera : null, center);
+                                var ped = new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current) { position = screen };
+                                var hits = new List<UnityEngine.EventSystems.RaycastResult>();
+                                UnityEngine.EventSystems.EventSystem.current.RaycastAll(ped, hits);
+                                for (int h = 0; h < Math.Min(4, hits.Count); h++)
+                                {
+                                    var hg = hits[h].gameObject;
+                                    var hcv = hg.GetComponentInParent<Canvas>();
+                                    string hpath = hg.name;
+                                    for (var pw = hg.transform.parent; pw != null && hpath.Length < 90; pw = pw.parent) hpath = pw.gameObject.name + "/" + hpath;
+                                    top += (h > 0 ? " >> " : "") + $"{hg.name}{{cv={(hcv != null ? hcv.name + "#" + hcv.sortingOrder : "none")} d={hits[h].depth} path={hpath}}}";
+                                }
+                            }
+                            catch (Exception rex) { top = "rayerr:" + rex.Message; }
+                            bool wasFocused = inp.isFocused;
+                            string sel;
+                            try
+                            {
+                                UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(inp.gameObject);
+                                inp.ActivateInputField();
+                                sel = UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject != null
+                                    ? UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject.name : "null";
+                            }
+                            catch (Exception fex) { sel = "err:" + fex.Message; }
+                            // Geometry + raycastability of everything under the field ROOT (the
+                            // named ancestor): the visible box may not be where the InputField is.
+                            string tree = "";
+                            try
+                            {
+                                Transform rootT = inp.transform;
+                                for (var w2 = inp.transform; w2 != null; w2 = w2.parent)
+                                    if (w2.gameObject.name == nm) { rootT = w2; break; }
+                                var cvv = inp.GetComponentInParent<Canvas>();
+                                var cam = cvv != null && cvv.renderMode != RenderMode.ScreenSpaceOverlay ? cvv.worldCamera : null;
+                                foreach (var g in rootT.GetComponentsInChildren<UnityEngine.UI.Graphic>(true))
+                                {
+                                    var grt = g.rectTransform;
+                                    var c4 = new Vector3[4]; grt.GetWorldCorners(c4);
+                                    Vector2 mn = RectTransformUtility.WorldToScreenPoint(cam, c4[0]);
+                                    Vector2 mx = RectTransformUtility.WorldToScreenPoint(cam, c4[2]);
+                                    tree += $"{g.gameObject.name}[{g.GetType().Name} rt={(g.raycastTarget ? 1 : 0)} en={(g.isActiveAndEnabled ? 1 : 0)} x={mn.x:F0}-{mx.x:F0} y={mn.y:F0}-{mx.y:F0}]; ";
+                                }
+                                var irt = (RectTransform)inp.transform;
+                                var ic4 = new Vector3[4]; irt.GetWorldCorners(ic4);
+                                Vector2 imn = RectTransformUtility.WorldToScreenPoint(cam, ic4[0]);
+                                Vector2 imx = RectTransformUtility.WorldToScreenPoint(cam, ic4[2]);
+                                tree += $"| inputRect x={imn.x:F0}-{imx.x:F0} y={imn.y:F0}-{imx.y:F0} scale={inp.transform.lossyScale.x:F2}";
+                            }
+                            catch (Exception tex) { tree = "treeerr:" + tex.Message; }
+                            if (fi++ > 0) sbp.Append(",");
+                            sbp.Append($"{{\"name\":\"{Esc(nm)}\",\"activeInHierarchy\":{(inp.isActiveAndEnabled ? "true" : "false")},\"interactable\":{(inp.interactable ? "true" : "false")},\"cgOk\":{(cgOk ? "true" : "false")},\"wasFocusedBefore\":{(wasFocused ? "true" : "false")},\"topHits\":\"{Esc(top)}\",\"selectedNow\":\"{Esc(sel)}\",\"tree\":\"{Esc(tree)}\"}}");
+                        }
+                        sbp.Append("]}");
+                        return sbp.ToString();
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "uiclick":
+                    // Simulate a player's mouse click at the named field's center through the
+                    // full EventSystem pipeline (raycast -> handler walk -> down/up/click) and
+                    // report focus. InputField focus lands a frame later, so call twice:
+                    // focusedBefore=true on the second call proves the first click stuck.
+                    try
+                    {
+                        string want = Get(q, "name", "User");
+                        InputField target = null;
+                        foreach (var cand in Resources.FindObjectsOfTypeAll<InputField>())
+                        {
+                            if (cand == null || !cand.gameObject.scene.IsValid() || !cand.isActiveAndEnabled) continue;
+                            for (var t = cand.transform; t != null && target == null; t = t.parent)
+                                if (t.gameObject.name == want) target = cand;
+                            if (target != null) break;
+                        }
+                        if (target == null) return "{\"error\":\"field not found or inactive\"}";
+                        bool before = target.isFocused;
+                        var rt3 = (RectTransform)target.transform;
+                        var cs = new Vector3[4]; rt3.GetWorldCorners(cs);
+                        var cvx = target.GetComponentInParent<Canvas>();
+                        Vector2 sp = RectTransformUtility.WorldToScreenPoint(
+                            cvx != null && cvx.renderMode != RenderMode.ScreenSpaceOverlay ? cvx.worldCamera : null, (cs[0] + cs[2]) / 2f);
+                        var es = UnityEngine.EventSystems.EventSystem.current;
+                        var pd = new UnityEngine.EventSystems.PointerEventData(es) { position = sp, button = UnityEngine.EventSystems.PointerEventData.InputButton.Left, clickCount = 1 };
+                        var hits2 = new List<UnityEngine.EventSystems.RaycastResult>();
+                        es.RaycastAll(pd, hits2);
+                        if (hits2.Count == 0) return "{\"error\":\"no raycast hit at field center\"}";
+                        pd.pointerCurrentRaycast = pd.pointerPressRaycast = hits2[0];
+                        var pressGo = UnityEngine.EventSystems.ExecuteEvents.ExecuteHierarchy(hits2[0].gameObject, pd, UnityEngine.EventSystems.ExecuteEvents.pointerDownHandler);
+                        var clickGo = UnityEngine.EventSystems.ExecuteEvents.GetEventHandler<UnityEngine.EventSystems.IPointerClickHandler>(hits2[0].gameObject);
+                        pd.pointerPress = pressGo;
+                        UnityEngine.EventSystems.ExecuteEvents.ExecuteHierarchy(hits2[0].gameObject, pd, UnityEngine.EventSystems.ExecuteEvents.pointerUpHandler);
+                        if (clickGo != null) UnityEngine.EventSystems.ExecuteEvents.Execute(clickGo, pd, UnityEngine.EventSystems.ExecuteEvents.pointerClickHandler);
+                        return $"{{\"field\":\"{Esc(want)}\",\"topHit\":\"{Esc(hits2[0].gameObject.name)}\",\"pressHandler\":\"{Esc(pressGo != null ? pressGo.name : "null")}\",\"clickHandler\":\"{Esc(clickGo != null ? clickGo.name : "null")}\",\"focusedBefore\":{(before ? "true" : "false")},\"focusedAfter\":{(target.isFocused ? "true" : "false")}}}";
                     }
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "closewin":

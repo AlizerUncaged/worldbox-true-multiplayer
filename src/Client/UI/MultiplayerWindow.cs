@@ -45,6 +45,10 @@ namespace WorldboxMP.Client.UI
             // stops logging "missing text: WorldBox Multiplayer" on every open.
             try { NeoModLoader.General.LM.AddToCurrentLocale("WorldBox Multiplayer", "WorldBox Multiplayer"); } catch { }
             CreateWindow(WindowId, "WorldBox Multiplayer");
+            // NML leaves the freshly built window visible, so the login form greeted the
+            // player on every boot (the tab prewarms the window at creation). Deactivate
+            // the clone immediately - showWindow() reactivates it on an explicit open.
+            try { Instance?.ScrollWindowComponent.gameObject.SetActive(false); } catch { }
             _created = true;
         }
 
@@ -112,8 +116,40 @@ namespace WorldboxMP.Client.UI
             BuildJoinPanel();
             BuildRoomPanel();
             BuildSettingsPanel();
+            FixClickThrough();
             WireNet();
             Refresh();
+        }
+
+        /// <summary>
+        /// The cloned native frame ships decorative graphics (logo, frame plates) whose
+        /// rects extend over the content area and sit ABOVE it in raycast order - clicks
+        /// on the input fields died on them (buttons only worked because they fall outside
+        /// those rects). Interactive controls are the only legitimate click targets, so
+        /// every graphic without a Selectable on itself or an ancestor stops raycasting,
+        /// and one invisible full-window plate (bottom of the stack) keeps the window
+        /// swallowing clicks that would otherwise fall through to the world map.
+        /// </summary>
+        private void FixClickThrough()
+        {
+            Transform root;
+            try { root = ScrollWindowComponent.transform; } catch { root = transform; }
+            int kept = 0, disabled = 0;
+            foreach (var g in root.GetComponentsInChildren<Graphic>(true))
+            {
+                bool interactive = false;
+                for (var t = g.transform; t != null && !interactive; t = t.parent)
+                    interactive = t.GetComponent<Selectable>() != null;
+                g.raycastTarget = interactive;
+                if (interactive) kept++; else disabled++;
+            }
+            ModLog.Info($"[UI] raycast fix: root={root.name} parent={(root.parent != null ? root.parent.name : "null")} kept={kept} disabled={disabled}");
+            var plate = UiKit.MakeRect("ClickPlate", root);
+            plate.transform.SetAsFirstSibling();
+            var prt = plate.GetComponent<RectTransform>();
+            prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one;
+            prt.offsetMin = prt.offsetMax = Vector2.zero;
+            plate.AddComponent<Image>().color = Color.clear;   // invisible, still raycastable
         }
 
         private void BuildLoginPanel()

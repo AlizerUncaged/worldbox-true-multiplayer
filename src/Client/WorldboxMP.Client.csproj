@@ -129,6 +129,13 @@
     </EmbeddedResource>
   </ItemGroup>
 
+  <!-- Date-based version, stamped on EVERY build into the DEPLOYED mod.json (the
+       committed source keeps a placeholder). NML reads the deployed file, so the
+       in-game badge shows e.g. beta-2026.07.30.2043 automatically. -->
+  <PropertyGroup>
+    <ModVersion>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</ModVersion>
+  </PropertyGroup>
+
   <!-- Debug auto-deploy: copy the WHOLE client output (Client + Shared + LiteNetLib +
        mod.json) into the live Mods folder so deploys never go out of sync. -->
   <Target Name="DeployToMods" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
@@ -141,7 +148,10 @@
     <MakeDir Directories="$(DeployDir)" />
     <Copy SourceFiles="@(_DeployFiles)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="false" />
     <Copy SourceFiles="@(_DeployGlb)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="true" />
-    <Message Importance="high" Text="[WBMP] Deployed client -> $(DeployDir)" />
+    <!-- Script file, not python -c: inline commands pass through cmd.exe, which eats
+         the ^ in the regex and silently leaves the placeholder version in place. -->
+    <Exec Command="python &quot;$(MSBuildProjectDirectory)\stamp_version.py&quot; &quot;$(DeployDir)\mod.json&quot; $(ModVersion)" />
+    <Message Importance="high" Text="[WBMP] Deployed client -> $(DeployDir) (version $(ModVersion))" />
   </Target>
 
   <!-- Release ship pipeline: obfuscate the client DLL (Obfuscar, config in
@@ -151,10 +161,9 @@
        debugging user crash reports) stays in bin\Release\obfuscated. -->
   <Target Name="ObfuscateAndPublish" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
-      <!-- Each ship build lands in its own channel+dated folder:
-           bin\Publish\beta-YYYY-MM-DD-HHmmss -->
-      <PublishStamp>$([System.DateTime]::Now.ToString("yyyy-MM-dd-HHmmss"))</PublishStamp>
-      <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish\$(ReleaseChannel)-$(PublishStamp)</PublishModDir>
+      <!-- Each ship build lands in a folder named after its full version:
+           bin\Publish\beta-2026.07.30.2043 - the same string players see in the HUD. -->
+      <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish\$(ReleaseChannel)-$(ModVersion)</PublishModDir>
     </PropertyGroup>
     <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." />
     <Exec Command="dotnet tool run obfuscar.console &quot;$(MSBuildProjectDirectory)\obfuscar.xml&quot;" WorkingDirectory="$(TargetDir)" />
@@ -169,7 +178,8 @@
     <Copy SourceFiles="@(_ShipDlls)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="false" />
     <Copy SourceFiles="@(_ShipFiles)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="false" />
     <Copy SourceFiles="@(_ShipGlb)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="true" />
-    <Message Importance="high" Text="[WBMP] Obfuscated ship build -> $(PublishModDir)" />
+    <Exec Command="python &quot;$(MSBuildProjectDirectory)\stamp_version.py&quot; &quot;$(PublishModDir)\mod.json&quot; $(ModVersion)" />
+    <Message Importance="high" Text="[WBMP] Obfuscated ship build $(ReleaseChannel)-$(ModVersion) -> $(PublishModDir)" />
   </Target>
 
 </Project>
