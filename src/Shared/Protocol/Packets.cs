@@ -220,9 +220,14 @@ namespace WorldboxMP.Shared.Protocol
     {
         public byte Kind;            // MirrorKind
         public string SenderId4 = "";
+        /// <summary>World generation this message belongs to. The king bumps it when it
+        /// loads/generates a different world; receivers drop messages whose epoch doesn't
+        /// match the world they're on, so stale mirrors can't corrupt a mid-transfer world.
+        /// 0 = sender has no synced world yet.</summary>
+        public byte Epoch;
         public byte[] Payload = System.Array.Empty<byte>();
-        public void Serialize(NetDataWriter w) { w.Put(Kind); w.Put(SenderId4); w.PutBytesWithLength(Payload); }
-        public void Deserialize(NetDataReader r) { Kind = r.GetByte(); SenderId4 = r.GetString(); Payload = r.GetBytesWithLength(); }
+        public void Serialize(NetDataWriter w) { w.Put(Kind); w.Put(SenderId4); w.Put(Epoch); w.PutBytesWithLength(Payload); }
+        public void Deserialize(NetDataReader r) { Kind = r.GetByte(); SenderId4 = r.GetString(); Epoch = r.GetByte(); Payload = r.GetBytesWithLength(); }
     }
 
     /// <summary>
@@ -252,7 +257,8 @@ namespace WorldboxMP.Shared.Protocol
     }
 
     /// <summary>
-    /// Server → king: "a player just joined; please produce a world snapshot for them."
+    /// Server → king: "produce a world snapshot for this player" (sent on join, and on a
+    /// follower's explicit resync request).
     /// </summary>
     public class SnapshotRequest : INetSerializable
     {
@@ -262,14 +268,41 @@ namespace WorldboxMP.Shared.Protocol
     }
 
     /// <summary>
-    /// Full-world snapshot (zlib JSON from SaveManager). King → server → the one
-    /// joining player identified by <see cref="TargetId4"/>.
+    /// Follower → server: "my world drifted / never arrived - ask the king to resync me."
+    /// The server rate-limits and converts it into a <see cref="SnapshotRequest"/> to the king.
     /// </summary>
-    public class WorldSnapshot : INetSerializable
+    public class ResyncRequest : INetSerializable
+    {
+        public void Serialize(NetDataWriter w) { }
+        public void Deserialize(NetDataReader r) { }
+    }
+
+    /// <summary>
+    /// One piece of a full-world snapshot (zlib JSON from SaveManager), king → server →
+    /// target(s). Travels on <see cref="NetProtocol.SnapshotChannel"/> so a huge world
+    /// can't head-of-line-block live mirrors. TargetId4 empty = broadcast resync.
+    /// Count/TotalBytes ride on every chunk so receivers can show progress and allocate
+    /// without a separate header packet; TransferId lets a newer transfer supersede an
+    /// unfinished one.
+    /// </summary>
+    public class SnapshotChunk : INetSerializable
     {
         public string TargetId4 = "";
+        public int TransferId;
+        public byte Epoch;          // world generation this snapshot represents
+        public int Index;
+        public int Count;
+        public int TotalBytes;
         public byte[] Data = System.Array.Empty<byte>();
-        public void Serialize(NetDataWriter w) { w.Put(TargetId4); w.PutBytesWithLength(Data); }
-        public void Deserialize(NetDataReader r) { TargetId4 = r.GetString(); Data = r.GetBytesWithLength(); }
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(TargetId4); w.Put(TransferId); w.Put(Epoch);
+            w.Put(Index); w.Put(Count); w.Put(TotalBytes); w.PutBytesWithLength(Data);
+        }
+        public void Deserialize(NetDataReader r)
+        {
+            TargetId4 = r.GetString(); TransferId = r.GetInt(); Epoch = r.GetByte();
+            Index = r.GetInt(); Count = r.GetInt(); TotalBytes = r.GetInt(); Data = r.GetBytesWithLength();
+        }
     }
 }

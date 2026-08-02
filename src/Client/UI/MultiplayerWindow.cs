@@ -230,7 +230,21 @@ namespace WorldboxMP.Client.UI
         {
             _roomPanel = UiKit.MakeColumn("RoomP", _host, UiKit.CardBg, 6f, new RectOffset(10, 10, 8, 8));
             var brow = UiKit.MakeRow("RTopRow", _roomPanel.transform);
-            UiKit.MakeButton("Resync", brow.transform, "Resync", () => Mirror.MirrorManager.Instance?.ForceSnapshotToAll(), UiKit.ButtonGrey);
+            // King: push the world to everyone. Follower: ask the server to have the king
+            // resend it to us (rate-limited server-side). Both give visible feedback.
+            UiKit.MakeButton("Resync", brow.transform, "Resync", () =>
+            {
+                if (Net.IsKing)
+                {
+                    Mirror.MirrorManager.Instance?.ForceSnapshotToAll();
+                    if (_msgText != null) _msgText.text = "Broadcasting the world to all players...";
+                }
+                else
+                {
+                    Net.RequestResync();
+                    if (_msgText != null) _msgText.text = "Resync requested - the world will arrive shortly.";
+                }
+            }, UiKit.ButtonGrey);
             UiKit.MakeButton("Leave", brow.transform, "Leave", () => Net.LeaveRoom(), UiKit.ButtonRed);
             UiKit.MakeText("plh", _roomPanel.transform, "Players", 14, TextAnchor.MiddleLeft, FontStyle.Bold, UiKit.Orange);
             _rosterContainer = UiKit.MakeColumn("Roster", _roomPanel.transform, null, 3f, new RectOffset(0, 0, 0, 0));

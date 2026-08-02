@@ -30,6 +30,18 @@ namespace WorldboxMP.Client.Mirror
                 if (clickedFinal != null)
                     harmony.Patch(clickedFinal, prefix: H(nameof(ClickedFinal_Prefix)), postfix: H(nameof(ClickedFinal_Postfix)));
 
+                // World load/generate detection: EVERY load path funnels through
+                // MapBox.clearWorld, so a postfix there is the one reliable "the king is
+                // switching worlds" signal (the actual resync waits for the load to settle).
+                var clearWorld = AccessTools.Method(typeof(MapBox), "clearWorld");
+                if (clearWorld != null) harmony.Patch(clearWorld, postfix: H(nameof(ClearWorld_Postfix)));
+
+                // Magnet drags: the Magnet state machine reads the LOCAL mouse, so follower
+                // drags must be streamed to the king (RemoteMagnet) instead of replayed.
+                // Observe-only - the local magnet still runs for instant feedback.
+                var magnetAction = AccessTools.Method(typeof(Magnet), "magnetAction");
+                if (magnetAction != null) harmony.Patch(magnetAction, prefix: H(nameof(MagnetAction_Prefix)));
+
                 // Drops / disasters (meteors, rain, loot…). Guarded so god-power drops
                 // (which replay via clickedFinal on followers) don't double.
                 var dropSpawn = AccessTools.Method(typeof(DropManager), "spawn",
@@ -409,6 +421,20 @@ namespace WorldboxMP.Client.Mirror
         private static void ClickedFinal_Postfix()
         {
             if (MirrorManager.Instance != null) MirrorManager.Instance.InGodPower = false;
+        }
+
+        // The local player loaded/generated a different world (fires on all load paths,
+        // including a follower applying a received snapshot - MirrorManager sorts out
+        // that only the KING reacts).
+        private static void ClearWorld_Postfix() => MirrorManager.Instance?.OnWorldCleared();
+
+        // Follower dragging the magnet: stream the drag position to the king; the local
+        // magnet still runs (return true) so the dragger gets instant visual feedback.
+        private static bool MagnetAction_Prefix(bool pFromUpdate, WorldTile pTile)
+        {
+            var m = MirrorManager.Instance;
+            if (m != null && m.IsFollower && !pFromUpdate && pTile != null) m.OnFollowerMagnet(pTile);
+            return true;
         }
 
         private static void DropSpawn_Postfix(object[] __args)

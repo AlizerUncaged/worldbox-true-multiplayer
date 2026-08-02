@@ -53,7 +53,7 @@ namespace WorldboxMP.Client.Net
         public event Action<CursorUpdate> OnRemoteCursor;
         public event Action<MirrorMessage> OnMirror;
         public event Action<SnapshotRequest> OnSnapshotRequested;
-        public event Action<WorldSnapshot> OnSnapshotReceived;
+        public event Action<SnapshotChunk> OnSnapshotChunk;
 
         public NetClient()
         {
@@ -61,7 +61,8 @@ namespace WorldboxMP.Client.Net
             _net = new NetManager(_listener)
             {
                 AutoRecycle = true, UpdateTime = 15, UnconnectedMessagesEnabled = false,
-                EnableStatistics = true   // thread-safe byte/packet counters for the HUD
+                EnableStatistics = true,  // thread-safe byte/packet counters for the HUD
+                ChannelsCount = NetProtocol.ChannelCount   // ch1 = snapshot chunks
             };
             WireEvents();
             WirePackets();
@@ -128,13 +129,22 @@ namespace WorldboxMP.Client.Net
         public void Demote(string id4) => Send(new ModerationRequest { Action = ModerationRequest.ACTION_DEMOTE, TargetId4 = id4 });
         public void SendCursor(float x, float y, bool pressed) =>
             Send(new CursorUpdate { X = x, Y = y, Pressed = pressed }, DeliveryMethod.Sequenced);
-        public void SendMirror(MirrorKind kind, byte[] payload, DeliveryMethod method = DeliveryMethod.ReliableOrdered) =>
-            Send(new MirrorMessage { Kind = (byte)kind, Payload = payload ?? Array.Empty<byte>() }, method);
+        public void SendMirror(MirrorKind kind, byte[] payload, byte epoch, DeliveryMethod method = DeliveryMethod.ReliableOrdered) =>
+            Send(new MirrorMessage { Kind = (byte)kind, Payload = payload ?? Array.Empty<byte>(), Epoch = epoch }, method);
+
+        /// <summary>Follower: ask the server to have the king resend us the world.</summary>
+        public void RequestResync() => Send(new ResyncRequest());
 
         private void Send<T>(T packet, DeliveryMethod method = DeliveryMethod.ReliableOrdered) where T : INetSerializable
         {
             if (_server == null || State != ConnState.Connected) return;
             _server.Send(_proc, packet, method);
+        }
+
+        private void Send<T>(T packet, byte channel, DeliveryMethod method) where T : INetSerializable
+        {
+            if (_server == null || State != ConnState.Connected) return;
+            _server.Send(_proc, packet, channel, method);
         }
 
         // ── Wiring ──────────────────────────────────────────────────────────
@@ -160,7 +170,7 @@ namespace WorldboxMP.Client.Net
             _proc.SubscribeNetSerializable<CursorUpdate>(p => OnRemoteCursor?.Invoke(p));
             _proc.SubscribeNetSerializable<MirrorMessage>(p => OnMirror?.Invoke(p));
             _proc.SubscribeNetSerializable<SnapshotRequest>(p => OnSnapshotRequested?.Invoke(p));
-            _proc.SubscribeNetSerializable<WorldSnapshot>(p => OnSnapshotReceived?.Invoke(p));
+            _proc.SubscribeNetSerializable<SnapshotChunk>(p => OnSnapshotChunk?.Invoke(p));
             _proc.SubscribeNetSerializable<PingProbe>(OnPingProbe);
             _proc.SubscribeNetSerializable<PongReply>(OnPongReply);
         }
@@ -190,9 +200,9 @@ namespace WorldboxMP.Client.Net
             LastPingMs = ms < 0 ? 0 : (int)System.Math.Round(ms);
         }
 
-        /// <summary>King → server → joiner: ship the current world snapshot.</summary>
-        public void SendSnapshot(string targetId4, byte[] data) =>
-            Send(new WorldSnapshot { TargetId4 = targetId4, Data = data ?? Array.Empty<byte>() });
+        /// <summary>King → server → target(s): one snapshot chunk, on the snapshot channel.</summary>
+        public void SendSnapshotChunk(SnapshotChunk chunk) =>
+            Send(chunk, NetProtocol.SnapshotChannel, DeliveryMethod.ReliableOrdered);
 
         /// <summary>Change target endpoint and reconnect (used by the settings dialog).</summary>
         public void Reconnect(string host, int port)

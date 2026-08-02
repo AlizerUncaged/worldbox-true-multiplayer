@@ -153,6 +153,44 @@ namespace WorldboxMP.Client.Mirror
         public float PeriodicSnapshotSeconds = 0f;
         private bool _lastPaused;
         private string _lastSpeedId = "";
+
+        // ── World epoch ─────────────────────────────────────────────────────
+        // The king bumps _epoch when it loads/generates a different world; every mirror
+        // is stamped with the sender's epoch and receivers drop mismatches, so stale
+        // messages can't corrupt a world that is mid-transfer. Followers start at 0
+        // ("no synced world") and adopt the epoch carried by each applied snapshot -
+        // which also means a fresh follower applies NOTHING until its first snapshot.
+        private byte _epoch = 1;          // king's current world generation (0 reserved)
+        private byte _appliedEpoch;       // follower: epoch of the world we actually loaded
+        private byte CurrentEpoch => IsKing ? _epoch : _appliedEpoch;
+        /// <summary>The world generation this client is on (dev REST/state diagnostics).</summary>
+        public byte WorldEpoch => CurrentEpoch;
+        private int _epochDropLog;
+
+        // King world-change detection: MapBox.clearWorld sets the flag; once loading has
+        // settled for a moment, the king bumps the epoch and re-broadcasts the world.
+        private bool _worldChangePending;
+        private float _worldChangeSettle;
+        private int _pumpErr;
+
+        // ── Chunked snapshot transfers (channel 1, see NetProtocol) ─────────
+        private class OutgoingSnapshot
+        {
+            public string TargetId4;
+            public int TransferId;
+            public byte Epoch;
+            public byte[] Data;
+            public int NextIndex;
+            public int Count;
+        }
+        private readonly List<OutgoingSnapshot> _outgoingSnapshots = new List<OutgoingSnapshot>();
+        private int _nextTransferId = 1;
+
+        // Follower-side reassembly (chunks are reliable-ordered, so counting suffices).
+        private int _rxTransferId = -1;
+        private byte[] _rxSnapshot;
+        private int _rxChunksGot, _rxChunkCount;
+        private byte _rxEpoch;
         private static string SafeSpeedId()
         {
             try { return Config.time_scale_asset != null ? Config.time_scale_asset.id : ""; } catch { return ""; }
@@ -210,7 +248,7 @@ namespace WorldboxMP.Client.Mirror
             var net = NetClient.Instance;
             net.OnMirror += Instance.OnMirror;
             net.OnSnapshotRequested += Instance.OnSnapshotRequested;
-            net.OnSnapshotReceived += Instance.OnSnapshotReceived;
+            net.OnSnapshotChunk += Instance.OnSnapshotChunk;
             net.OnRoomJoined += _ => Instance.Reset();
             Api.WbmpApi.WireInternal();   // third-party plugin surface
             ModLog.Info("Mirroring initialized.");
@@ -229,6 +267,12 @@ namespace WorldboxMP.Client.Mirror
             ApplyingRemote = ApplyingSpawn = _applyingMove = _applyingProjectile = false;
             _lastPaused = SafePaused();
             _snapshotTimer = 0f;
+            _appliedEpoch = 0;                 // follower: no synced world until a snapshot lands
+            _outgoingSnapshots.Clear();
+            _rxTransferId = -1; _rxSnapshot = null;
+            _worldChangePending = false;
+            RemoteMagnet.Clear();
+            UI.PingHud.TransferStatus = "";
         }
 
         /// <summary>King: an actor committed to step to a tile → queue it for this frame's batch.</summary>
@@ -285,8 +329,26 @@ namespace WorldboxMP.Client.Mirror
                 ModLog.Info($"[GODPOWER] local id='{power.id}' type={ptype} unselWindow={windowTool} terraform={terra} actorAsset='{actorAsset}' drop='{dropId}' tile='{tileType}' -> {(inspection ? "LOCAL-ONLY(inspection,skip mirror)" : "MIRROR")}");
             }
             if (inspection) return true;
+            // Drag powers (magnet) read the LOCAL mouse inside their own state machine, so
+            // replaying them via clickedFinal is meaningless (the replayer's mouse isn't
+            // held). Everyone runs them locally for instant feedback; followers separately
+            // stream drag positions (MirrorKind.MagnetDrag, sent from the magnetAction
+            // hook) that drive an authoritative RemoteMagnet session on the king.
+            if (power.id == "magnet") return true;
             Send(MirrorKind.GodPower, MirrorCodec.Write(new GodPowerMsg { PowerId = power.id, X = pos.x, Y = pos.y }));
             return IsKing;
+        }
+
+        /// <summary>Follower (from the Magnet.magnetAction hook): stream the held-drag
+        /// position to the king, throttled. The king's RemoteMagnet session drops the
+        /// carried units after a short silence, so no explicit release message is needed.</summary>
+        private float _lastMagnetSend;
+        public void OnFollowerMagnet(WorldTile tile)
+        {
+            if (!Active || IsKing || tile == null) return;
+            if (UnityEngine.Time.unscaledTime - _lastMagnetSend < 0.05f) return;   // ~20 Hz
+            _lastMagnetSend = UnityEngine.Time.unscaledTime;
+            Send(MirrorKind.MagnetDrag, MirrorCodec.Write(new GodPowerMsg { PowerId = "magnet", X = tile.pos.x, Y = tile.pos.y }));
         }
 
         public void OnKingSpawned(Actor actor, string assetId)
@@ -660,9 +722,21 @@ namespace WorldboxMP.Client.Mirror
         private int _rxLog;
         private void OnMirror(MirrorMessage msg)
         {
+            // Epoch gate: drop anything from a different world generation than the one
+            // we're on. Also silences everything on a fresh follower (_appliedEpoch 0)
+            // until its first snapshot lands - mirrors must never touch the menu world.
+            if (msg.Epoch != CurrentEpoch)
+            {
+                if (_epochDropLog < 10) { _epochDropLog++; ModLog.Info($"[RX] epoch drop kind={(MirrorKind)msg.Kind} theirs={msg.Epoch} ours={CurrentEpoch}"); }
+                return;
+            }
             if (_rxLog < 60) { _rxLog++; ModLog.Info($"[RX] kind={(MirrorKind)msg.Kind} bytes={msg.Payload?.Length} isKing={IsKing} isFollower={IsFollower}"); }
             switch ((MirrorKind)msg.Kind)
             {
+                case MirrorKind.MagnetDrag:
+                    // A follower is dragging the magnet: drive their RemoteMagnet session.
+                    if (IsKing) RemoteMagnet.OnDrag(msg.SenderId4, MirrorCodec.ReadGodPower(msg.Payload));
+                    break;
                 case MirrorKind.GodPower:
                     ApplyGodPower(MirrorCodec.ReadGodPower(msg.Payload));
                     if (IsKing) Send(MirrorKind.GodPower, msg.Payload);
@@ -767,6 +841,11 @@ namespace WorldboxMP.Client.Mirror
 
         private void ApplyGodPower(GodPowerMsg m)
         {
+            // Drag powers never replay via clickedFinal: the magnet's state machine reads
+            // the LOCAL mouse, so invoking it here would run against the replayer's input
+            // (instantly dropping, or hijacking the king's own held magnet). Follower
+            // magnet reaches the king via MirrorKind.MagnetDrag -> RemoteMagnet instead.
+            if (m.PowerId == "magnet") return;
             var power = AssetManager.powers.get(m.PowerId);
             if (power == null) return;
             if (_godLog < 30) { _godLog++; ModLog.Info($"[GODPOWER] APPLY id='{m.PowerId}' at ({m.X},{m.Y}) unselWindow={power.unselect_when_window} (follower opens this -> if it's an info tool, THIS is the dialogue-sync bug)"); }
@@ -1459,6 +1538,13 @@ namespace WorldboxMP.Client.Mirror
         {
             if (!Active || !IsKing) return;
 
+            // Each subsystem is isolated: an exception in one must never abort the whole
+            // pump (NetPump.Update runs the REST drain after us - a repeating throw here
+            // starved it once and "wedged" the king).
+            try { PumpWorldChange(dt); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("PumpWorldChange: " + e.Message); } }
+            try { PumpSnapshotTransfers(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("PumpSnapshotTransfers: " + e.Message); } }
+            try { RemoteMagnet.Update(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("RemoteMagnet: " + e.Message); } }
+
             // Sync ONLY the explicit pause (Config.paused = the pause button). The game's
             // EFFECTIVE pause is `Config.paused || isWindowActive || ads` (decompiled) - so
             // opening a dialog/menu pauses the King via the SEPARATE isWindowActive term WITHOUT
@@ -1575,20 +1661,29 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn("SendAnimPoll failed: " + e.Message); }
         }
 
-        // extra_long_poll (1000ms): force-override each actor's full state on followers, so
-        // traits/statuses/vitals that drifted (or whose events were missed) get corrected and
-        // derived stats (max health, speed, damage) recompute correctly. Heavier than scalars,
-        // so it's on the slowest tier.
+        // extra_long_poll (1000ms): force-override actor state on followers, so traits/
+        // statuses/vitals that drifted (or whose events were missed) get corrected and
+        // derived stats (max health, speed, damage) recompute correctly.
+        //
+        // BUDGETED round-robin: serializing EVERY actor to JSON every second saturated
+        // the channel on army-heavy worlds (hundreds of units -> megabytes/sec), and
+        // followers fell minutes behind, which read as permanent desync. Now at most
+        // ResyncBatchSize actors go out per tick, rotating through the population - the
+        // safety net stays complete (full coverage every units/batch seconds) but the
+        // bandwidth is capped and independent of world size.
+        private int _resyncCursor;
+        private const int ResyncBatchSize = 60;
         private void SendActorResync()
         {
             try
             {
                 var units = World.world?.units?.getSimpleList();
-                if (units == null) return;
-                var list = new List<ActorStateMsg>(units.Count);
-                for (int i = 0; i < units.Count; i++)
+                if (units == null || units.Count == 0) return;
+                int batch = Math.Min(ResyncBatchSize, units.Count);
+                var list = new List<ActorStateMsg>(batch);
+                for (int n = 0; n < batch; n++)
                 {
-                    var a = units[i];
+                    var a = units[(_resyncCursor + n) % units.Count];
                     if (a == null || !a.isAlive()) continue;
                     try { a.prepareForSave(); } catch { }
                     var data = _actorDataField?.GetValue(a) as ActorData;
@@ -1600,6 +1695,7 @@ namespace WorldboxMP.Client.Mirror
                         StatsJson = JsonConvert.SerializeObject(ReadStats(a))   // king's computed stats
                     });
                 }
+                _resyncCursor = (_resyncCursor + batch) % units.Count;
                 if (list.Count > 0) Send(MirrorKind.ActorResync, MirrorCodec.WriteActorResync(list));
             }
             catch (Exception e) { ModLog.Warn("SendActorResync failed: " + e.Message); }
@@ -1697,29 +1793,124 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn($"RefreshStructural({mgr.GetType().Name}) failed: " + e.Message); }
         }
 
-        // ── Snapshots ───────────────────────────────────────────────────────
+        // ── Snapshots (chunked, channel 1) ──────────────────────────────────
         /// <summary>King: broadcast a full world snapshot to every follower (full resync).</summary>
         public void ForceSnapshotToAll()
         {
             if (!Active || !IsKing) return;
+            StartSnapshotTransfer("");
+        }
+
+        /// <summary>King: serialize the world once and queue it as a chunked transfer.
+        /// Chunks are pumped a few per frame on their own channel, so even a huge world
+        /// can't head-of-line-block the live mirror stream.</summary>
+        private void StartSnapshotTransfer(string targetId4)
+        {
+            if (!Active || !IsKing) return;
             var data = WorldSync.Save();
-            if (data.Length > 0) { NetClient.Instance.SendSnapshot("", data); ModLog.Info($"Broadcast world resync ({data.Length} bytes)."); }
+            if (data.Length == 0) return;
+            // A newer transfer to the same audience supersedes an unfinished one.
+            _outgoingSnapshots.RemoveAll(t => t.TargetId4 == targetId4);
+            int count = (data.Length + NetProtocol.SnapshotChunkSize - 1) / NetProtocol.SnapshotChunkSize;
+            _outgoingSnapshots.Add(new OutgoingSnapshot
+            {
+                TargetId4 = targetId4, TransferId = _nextTransferId++, Epoch = _epoch,
+                Data = data, Count = count
+            });
+            ModLog.Info($"Snapshot transfer queued: {data.Length} bytes / {count} chunks -> {(targetId4.Length == 0 ? "ALL" : targetId4)} (epoch {_epoch}).");
+        }
+
+        /// <summary>King: submit a couple of chunks per frame (LiteNetLib paces the wire;
+        /// this bounds queue growth and lets a superseding transfer cancel cleanly).</summary>
+        private void PumpSnapshotTransfers()
+        {
+            for (int t = _outgoingSnapshots.Count - 1; t >= 0; t--)
+            {
+                var tr = _outgoingSnapshots[t];
+                for (int n = 0; n < 2 && tr.NextIndex < tr.Count; n++)
+                {
+                    int off = tr.NextIndex * NetProtocol.SnapshotChunkSize;
+                    int len = Math.Min(NetProtocol.SnapshotChunkSize, tr.Data.Length - off);
+                    var piece = new byte[len];
+                    Buffer.BlockCopy(tr.Data, off, piece, 0, len);
+                    NetClient.Instance.SendSnapshotChunk(new SnapshotChunk
+                    {
+                        TargetId4 = tr.TargetId4, TransferId = tr.TransferId, Epoch = tr.Epoch,
+                        Index = tr.NextIndex, Count = tr.Count, TotalBytes = tr.Data.Length, Data = piece
+                    });
+                    tr.NextIndex++;
+                }
+                if (tr.NextIndex >= tr.Count)
+                {
+                    ModLog.Info($"Snapshot transfer submitted: {tr.Count} chunks -> {(tr.TargetId4.Length == 0 ? "ALL" : tr.TargetId4)}.");
+                    _outgoingSnapshots.RemoveAt(t);
+                }
+            }
         }
 
         private void OnSnapshotRequested(SnapshotRequest req)
         {
             if (!IsKing) return;
-            var data = WorldSync.Save();
-            if (data.Length > 0) NetClient.Instance.SendSnapshot(req.ForId4, data);
+            StartSnapshotTransfer(req.ForId4);
             // Make the joiner adopt our current game speed/pause immediately (so their
             // passive sim replays movement at the right rate). Re-broadcast next Pump.
             _lastSpeedId = "\0"; _lastPaused = !SafePaused();
         }
 
-        private void OnSnapshotReceived(WorldSnapshot snap)
+        private void OnSnapshotChunk(SnapshotChunk c)
         {
-            WorldSync.Load(snap.Data);
+            if (IsKing) return;
+            if (c.TransferId != _rxTransferId)
+            {
+                // New (or superseding) transfer: start a fresh assembly buffer.
+                if (c.TotalBytes <= 0 || c.Count <= 0) return;
+                _rxTransferId = c.TransferId;
+                _rxSnapshot = new byte[c.TotalBytes];
+                _rxChunksGot = 0; _rxChunkCount = c.Count; _rxEpoch = c.Epoch;
+            }
+            if (_rxSnapshot == null) return;
+            long off = (long)c.Index * NetProtocol.SnapshotChunkSize;
+            if (c.Data == null || off + c.Data.Length > _rxSnapshot.Length) return;   // corrupt chunk
+            Buffer.BlockCopy(c.Data, 0, _rxSnapshot, (int)off, c.Data.Length);
+            _rxChunksGot++;
+            UI.PingHud.TransferStatus = _rxChunksGot < _rxChunkCount
+                ? $"Receiving world from the God King... {(int)(100f * _rxChunksGot / _rxChunkCount)}%"
+                : "Loading world...";
+            if (_rxChunksGot < _rxChunkCount) return;
+
+            var data = _rxSnapshot;
+            _rxSnapshot = null; _rxTransferId = -1;
+            WorldSync.Load(data);
             _kingToLocal.Clear();   // post-load actors carry king ids; new spawns repopulate the map
+            _appliedEpoch = _rxEpoch;
+            UI.PingHud.TransferStatus = "";
+            ModLog.Info($"World snapshot applied ({data.Length} bytes, epoch {_appliedEpoch}).");
+        }
+
+        /// <summary>Hook (MapBox.clearWorld postfix): the local player loaded/generated a
+        /// different world. Only meaningful on the king - after the load settles, it bumps
+        /// the epoch and re-broadcasts the world so followers actually change worlds too.</summary>
+        public void OnWorldCleared()
+        {
+            if (!Active || !IsKing) return;
+            _worldChangePending = true;
+            _worldChangeSettle = 0f;
+        }
+
+        private void PumpWorldChange(float dt)
+        {
+            if (!_worldChangePending) return;
+            bool loading = false;
+            try { loading = SmoothLoader.isLoading(); } catch { }
+            if (loading) { _worldChangeSettle = 0f; return; }
+            // Wait for a short stable window so we don't snapshot a half-built world.
+            _worldChangeSettle += dt;
+            if (_worldChangeSettle < 1.0f) return;
+            _worldChangePending = false;
+            _epoch++; if (_epoch == 0) _epoch = 1;   // byte wrap; 0 means "no world"
+            Reset();                                  // stale id maps refer to the old world
+            ModLog.Info($"King changed world -> epoch {_epoch}; broadcasting fresh snapshot.");
+            ForceSnapshotToAll();
         }
 
         // ── Helpers ─────────────────────────────────────────────────────────
@@ -1731,6 +1922,6 @@ namespace WorldboxMP.Client.Mirror
         public static bool KingPaused { get; private set; }
 
         private void Send(MirrorKind kind, byte[] payload, DeliveryMethod method = DeliveryMethod.ReliableOrdered) =>
-            NetClient.Instance.SendMirror(kind, payload, method);
+            NetClient.Instance.SendMirror(kind, payload, CurrentEpoch, method);
     }
 }

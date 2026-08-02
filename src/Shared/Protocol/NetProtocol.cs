@@ -12,11 +12,24 @@ namespace WorldboxMP.Shared.Protocol
     /// </summary>
     public static class NetProtocol
     {
-        /// <summary>Connection key LiteNetLib uses to accept peers. Bump on breaking protocol changes.</summary>
-        public const string ConnectKey = "WBMP/1";
+        /// <summary>Connection key LiteNetLib uses to accept peers. Bump on breaking protocol changes.
+        /// v2: mirror epoch, chunked snapshots on their own channel, follower resync requests.</summary>
+        public const string ConnectKey = "WBMP/2";
 
         /// <summary>Default server port (overridable).</summary>
         public const int DefaultPort = 40441;
+
+        /// <summary>LiteNetLib channel count on both sides. Channel 0 carries everything
+        /// except world snapshots; channel 1 carries the (potentially huge) snapshot
+        /// chunks so they can't head-of-line-block live mirror traffic.</summary>
+        public const int ChannelCount = 2;
+
+        /// <summary>Channel for <see cref="SnapshotChunk"/> transfers.</summary>
+        public const byte SnapshotChannel = 1;
+
+        /// <summary>Snapshot payload bytes per chunk. Small enough that live traffic
+        /// interleaves between chunks; big enough to keep per-chunk overhead trivial.</summary>
+        public const int SnapshotChunkSize = 48 * 1024;
 
         /// <summary>The fixed shareable id of the always-present first room.</summary>
         public const string Room0Id = "0000";
@@ -34,6 +47,15 @@ namespace WorldboxMP.Shared.Protocol
             var writer = new NetDataWriter();
             proc.WriteNetSerializable(writer, ref packet);
             peer.Send(writer, method);
+        }
+
+        /// <summary>Send a serializable packet on a specific LiteNetLib channel.</summary>
+        public static void Send<T>(this NetPeer peer, NetPacketProcessor proc, T packet,
+            byte channel, DeliveryMethod method) where T : INetSerializable
+        {
+            var writer = new NetDataWriter();
+            proc.WriteNetSerializable(writer, ref packet);
+            peer.Send(writer, channel, method);
         }
     }
 }

@@ -118,6 +118,17 @@ namespace WorldboxMP.Server.Rooms
                     m.Session.Peer.Send(writer, method);
         }
 
+        /// <summary>Send a packet to every member except one, on a specific channel.</summary>
+        public void BroadcastExcept<T>(NetPacketProcessor proc, string exceptId4, T packet,
+            byte channel, DeliveryMethod method) where T : INetSerializable
+        {
+            var writer = new NetDataWriter();
+            proc.WriteNetSerializable(writer, ref packet);
+            foreach (var m in _members.Values)
+                if (m.Id4 != exceptId4)
+                    m.Session.Peer.Send(writer, channel, method);
+        }
+
         private static string Hash(string s)
         {
             byte[] h = SHA256.HashData(Encoding.UTF8.GetBytes(s));

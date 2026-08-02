@@ -38,6 +38,7 @@ namespace WorldboxMP.Server.Net
             {
                 AutoRecycle = true,        // recycle readers after each receive event
                 UpdateTime = 15,
+                ChannelsCount = NetProtocol.ChannelCount,   // ch1 = snapshot chunks
             };
             _rooms = new RoomManager(_proc, Log);
             WireEvents();
@@ -101,7 +102,8 @@ namespace WorldboxMP.Server.Net
             _proc.SubscribeNetSerializable<CursorUpdate, NetPeer>(OnCursor);
             _proc.SubscribeNetSerializable<LogListRequest, NetPeer>(OnLogList);
             _proc.SubscribeNetSerializable<MirrorMessage, NetPeer>(OnMirror);
-            _proc.SubscribeNetSerializable<WorldSnapshot, NetPeer>(OnWorldSnapshot);
+            _proc.SubscribeNetSerializable<SnapshotChunk, NetPeer>(OnSnapshotChunk);
+            _proc.SubscribeNetSerializable<ResyncRequest, NetPeer>(OnResyncRequest);
             _proc.SubscribeNetSerializable<PingProbe, NetPeer>(OnPingProbe);
             _proc.SubscribeNetSerializable<PongReply, NetPeer>(OnPongReply);
         }
@@ -326,25 +328,45 @@ namespace WorldboxMP.Server.Net
             target?.Session.Peer.Send(_proc, p, DeliveryMethod.ReliableOrdered);
         }
 
-        private void OnWorldSnapshot(WorldSnapshot snap, NetPeer peer)
+        private void OnSnapshotChunk(SnapshotChunk chunk, NetPeer peer)
         {
             var s = SessionOf(peer); if (s == null || s.CurrentRoom == null) return;
-            // Only the king ships snapshots; forward to the single target joiner.
+            // Only the king ships snapshots; relay on the snapshot channel so the
+            // transfer can't head-of-line-block live mirror traffic.
             if (s.CurrentRoom.KingId4 != s.Id4) return;
-            if (string.IsNullOrEmpty(snap.TargetId4))
+            if (string.IsNullOrEmpty(chunk.TargetId4))
             {
-                // Periodic / on-demand resync → everyone except the king.
-                s.CurrentRoom.BroadcastExcept(_proc, s.Id4, snap, DeliveryMethod.ReliableOrdered);
-                LogC($"[{s.CurrentRoom.ShareableId}] {s.Username} broadcast world resync ({snap.Data.Length} bytes)",
-                     $"{Dim("[" + s.CurrentRoom.ShareableId + "]")} {Usr(s.Username)} {Act("resync")} {Dim(snap.Data.Length + " bytes → all")}");
+                s.CurrentRoom.BroadcastExcept(_proc, s.Id4, chunk, NetProtocol.SnapshotChannel, DeliveryMethod.ReliableOrdered);
+                if (chunk.Index == 0 || chunk.Index == chunk.Count - 1)
+                    LogC($"[{s.CurrentRoom.ShareableId}] {s.Username} resync chunk {chunk.Index + 1}/{chunk.Count} ({chunk.TotalBytes} bytes total) → all",
+                         $"{Dim("[" + s.CurrentRoom.ShareableId + "]")} {Usr(s.Username)} {Act("resync")} {Dim($"chunk {chunk.Index + 1}/{chunk.Count} → all")}");
                 return;
             }
-            var target = s.CurrentRoom.Get(snap.TargetId4);
+            var target = s.CurrentRoom.Get(chunk.TargetId4);
             if (target != null)
             {
-                target.Session.Peer.Send(_proc, snap, DeliveryMethod.ReliableOrdered);
-                Log($"Relayed world snapshot ({snap.Data.Length} bytes) {s.Username} → {target.Username}.");
+                target.Session.Peer.Send(_proc, chunk, NetProtocol.SnapshotChannel, DeliveryMethod.ReliableOrdered);
+                if (chunk.Index == 0 || chunk.Index == chunk.Count - 1)
+                    Log($"Relayed snapshot chunk {chunk.Index + 1}/{chunk.Count} ({chunk.TotalBytes} bytes total) {s.Username} → {target.Username}.");
             }
+        }
+
+        /// <summary>A follower asked to be resynced: convert to a SnapshotRequest to the
+        /// room king, rate-limited per session (snapshots are expensive for the king).</summary>
+        private const int ResyncCooldownSeconds = 8;
+        private void OnResyncRequest(ResyncRequest req, NetPeer peer)
+        {
+            var s = SessionOf(peer); if (s == null || s.CurrentRoom == null) return;
+            var room = s.CurrentRoom;
+            if (room.KingId4 == s.Id4) return;   // the king resyncs locally, not via the server
+            var now = System.DateTime.UtcNow;
+            if ((now - s.LastResyncRequestUtc).TotalSeconds < ResyncCooldownSeconds) return;
+            s.LastResyncRequestUtc = now;
+            var king = room.GetKing();
+            if (king == null) return;
+            king.Session.Peer.Send(_proc, new SnapshotRequest { ForId4 = s.Id4 });
+            LogC($"[{room.ShareableId}] {s.Username} requested world resync",
+                 $"{Dim("[" + room.ShareableId + "]")} {Usr(s.Username)} {Act("requested resync")}");
         }
 
         // ── Logging ─────────────────────────────────────────────────────────

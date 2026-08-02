@@ -96,7 +96,8 @@ namespace WorldboxMP.Client.Api
         {
             if (!InRoom || string.IsNullOrEmpty(channelId)) return;
             NetClient.Instance.SendMirror(MirrorKind.Plugin,
-                MirrorCodec.Write(new PluginMsg { Channel = channelId, Data = payload }));
+                MirrorCodec.Write(new PluginMsg { Channel = channelId, Data = payload }),
+                Mirror.MirrorManager.Instance?.WorldEpoch ?? (byte)0);
         }
 
         // ── Internal wiring (called by the mod, not by plugins) ─────────────

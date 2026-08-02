@@ -74,6 +74,10 @@ namespace WorldboxMP.Client.UI
             _pauseLabel.text = "";
         }
 
+        /// <summary>Center-top banner while a world snapshot transfer is in flight
+        /// ("Receiving world from the God King... 42%"). Set by MirrorManager.</summary>
+        public static string TransferStatus = "";
+
         private void Update()
         {
             var net = NetClient.Instance;
@@ -82,7 +86,9 @@ namespace WorldboxMP.Client.UI
             if (Input.GetKeyDown(KeyCode.F3)) _visible = !_visible;   // toggle the net HUD
 
             if (_pauseLabel != null)
-                _pauseLabel.text = Mirror.MirrorManager.KingPaused ? "⏸  The God King has paused the game" : "";
+                _pauseLabel.text = !string.IsNullOrEmpty(TransferStatus)
+                    ? TransferStatus
+                    : (Mirror.MirrorManager.KingPaused ? "⏸  The God King has paused the game" : "");
 
             if (!_visible) { _label.text = ""; return; }
 

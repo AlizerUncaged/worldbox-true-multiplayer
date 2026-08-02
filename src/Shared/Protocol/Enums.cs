@@ -157,6 +157,12 @@ namespace WorldboxMP.Shared.Protocol
         /// + position). The world-behaviour spawner only runs on the king; followers re-spawn
         /// the same cloud and their stack_effects update (run by the passive sim) drifts it.</summary>
         Weather = 33,
+
+        /// <summary>A follower dragging the magnet power (Magnet.magnetAction reads the LOCAL
+        /// mouse, so it can't replay via GodPower). Streamed while held (throttled); the king
+        /// drives a per-player RemoteMagnet and drops on a short silence timeout. Payload is
+        /// a GodPowerMsg (PowerId + tile).</summary>
+        MagnetDrag = 34,
     }
 }
 

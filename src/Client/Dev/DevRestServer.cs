@@ -307,6 +307,28 @@ namespace WorldboxMP.Client.Dev
                     return Ok("windows closed");
                 case "model3d": try { var inst = WorldboxMP.Client.UI.Model3D.Instance; if (inst == null) return "{\"error\":\"Model3D.Instance null (Spawn didn't run)\"}"; if (Get(q, "act", "show") == "hide") inst.Teardown(); else inst.Activate(); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; } return Ok("model3d " + Get(q, "act", "show"));
                 case "mpwindow": try { if (Get(q, "act", "open") == "open") WorldboxMP.Client.UI.MultiplayerWindow.Open(); else WorldboxMP.Client.UI.MultiplayerWindow.Prewarm(); } catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; } return Ok("mpwindow " + Get(q, "act", "open"));
+                case "resync":
+                    // Same logic as the window's Resync button, role-aware.
+                    try
+                    {
+                        if (net != null && net.IsKing) { WorldboxMP.Client.Mirror.MirrorManager.Instance?.ForceSnapshotToAll(); return Ok("king broadcast"); }
+                        net?.RequestResync(); return Ok("resync requested");
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "newworld":
+                    // Generate a fresh world (exercises the king world-change auto-resync).
+                    try { World.world.generateNewMap(); return Ok("generating new world"); }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "magnetdrag":
+                    // Follower: fake one magnet drag sample at (x,y) - drives RemoteMagnet
+                    // on the king when called repeatedly, and drop happens on silence.
+                    try
+                    {
+                        var mtile = World.world.GetTile(GetI(q, "x", 128), GetI(q, "y", 128));
+                        WorldboxMP.Client.Mirror.MirrorManager.Instance?.OnFollowerMagnet(mtile);
+                        return Ok("magnet drag sent");
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 default: return "{\"error\":\"unknown endpoint\"}";
             }
         }
@@ -347,6 +369,7 @@ namespace WorldboxMP.Client.Dev
             var sb = new StringBuilder();
             sb.Append("{");
             sb.Append($"\"version\":\"{Esc(ModInfo.Display)}\",");
+            sb.Append($"\"epoch\":{(mm != null ? mm.WorldEpoch : 0)},\"transfer\":\"{Esc(WorldboxMP.Client.UI.PingHud.TransferStatus ?? "")}\",");
             sb.Append($"\"role\":\"{role}\",\"connState\":\"{net?.State}\",\"loggedIn\":{(net != null && net.LoggedIn ? "true" : "false")},");
             sb.Append($"\"roomId\":\"{Esc(net?.RoomId ?? "")}\",\"inRoom\":{(net != null && net.InRoom ? "true" : "false")},\"isKing\":{(net != null && net.IsKing ? "true" : "false")},");
             // roster as THIS client sees it (verifies the roster push reaches non-kings too)
