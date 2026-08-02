@@ -319,6 +319,16 @@ namespace WorldboxMP.Client.Dev
                     // Generate a fresh world (exercises the king world-change auto-resync).
                     try { World.world.generateNewMap(); return Ok("generating new world"); }
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "transferbar":
+                    // Visual QA for the transfer progress bar: pct 0..100 shows, -1 hides.
+                    try
+                    {
+                        int pct = GetI(q, "pct", 50);
+                        if (pct < 0) WorldboxMP.Client.UI.PingHud.ClearTransfer();
+                        else WorldboxMP.Client.UI.PingHud.SetTransfer(pct / 100f, $"Receiving world  {pct}%  (12.3 MB)");
+                        return Ok("transferbar " + pct);
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "magnetdrag":
                     // Follower: fake one magnet drag sample at (x,y) - drives RemoteMagnet
                     // on the king when called repeatedly, and drop happens on silence.

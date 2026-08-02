@@ -186,6 +186,10 @@ namespace WorldboxMP.Client.Mirror
         private readonly List<OutgoingSnapshot> _outgoingSnapshots = new List<OutgoingSnapshot>();
         private int _nextTransferId = 1;
 
+        // Show the transfer progress bar only past this many chunks (~a quarter MB with
+        // 48KB chunks) - the size where a transfer becomes humanly noticeable.
+        private const int ProgressBarMinChunks = 6;
+
         // Follower-side reassembly (chunks are reliable-ordered, so counting suffices).
         private int _rxTransferId = -1;
         private byte[] _rxSnapshot;
@@ -272,7 +276,7 @@ namespace WorldboxMP.Client.Mirror
             _rxTransferId = -1; _rxSnapshot = null;
             _worldChangePending = false;
             RemoteMagnet.Clear();
-            UI.PingHud.TransferStatus = "";
+            UI.PingHud.ClearTransfer();
         }
 
         /// <summary>King: an actor committed to step to a tile → queue it for this frame's batch.</summary>
@@ -1873,9 +1877,17 @@ namespace WorldboxMP.Client.Mirror
             if (c.Data == null || off + c.Data.Length > _rxSnapshot.Length) return;   // corrupt chunk
             Buffer.BlockCopy(c.Data, 0, _rxSnapshot, (int)off, c.Data.Length);
             _rxChunksGot++;
-            UI.PingHud.TransferStatus = _rxChunksGot < _rxChunkCount
-                ? $"Receiving world from the God King... {(int)(100f * _rxChunksGot / _rxChunkCount)}%"
-                : "Loading world...";
+            // Progress bar only for LARGE transfers (big map on join / world change);
+            // small resyncs finish in well under a second and surface no UI at all.
+            bool big = _rxChunkCount > ProgressBarMinChunks;
+            if (big)
+            {
+                float mb = _rxSnapshot.Length / 1048576f;
+                UI.PingHud.SetTransfer((float)_rxChunksGot / _rxChunkCount,
+                    _rxChunksGot < _rxChunkCount
+                        ? $"Receiving world  {(int)(100f * _rxChunksGot / _rxChunkCount)}%  ({mb:F1} MB)"
+                        : "Loading world...");
+            }
             if (_rxChunksGot < _rxChunkCount) return;
 
             var data = _rxSnapshot;
@@ -1883,7 +1895,7 @@ namespace WorldboxMP.Client.Mirror
             WorldSync.Load(data);
             _kingToLocal.Clear();   // post-load actors carry king ids; new spawns repopulate the map
             _appliedEpoch = _rxEpoch;
-            UI.PingHud.TransferStatus = "";
+            if (big) UI.PingHud.ClearTransfer();
             ModLog.Info($"World snapshot applied ({data.Length} bytes, epoch {_appliedEpoch}).");
         }
 

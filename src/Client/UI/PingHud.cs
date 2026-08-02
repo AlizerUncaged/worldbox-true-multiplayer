@@ -17,6 +17,16 @@ namespace WorldboxMP.Client.UI
         private Text _pauseLabel;
         private bool _visible = true;
 
+        // Compact world-transfer progress bar (top-center). Shown only for LARGE
+        // transfers (player join / king world change with a big map) - small resyncs
+        // stay invisible. Fill uses localScale.x, the same technique the game's own
+        // bars use (there is no reusable native bar prefab).
+        private GameObject _barRoot;
+        private RectTransform _barFill;
+        private Text _barText;
+        private static float _transferPct = -1f;   // <0 = hidden
+        private static string _transferLabel = "";
+
         public static void Spawn()
         {
             var go = new GameObject("WBMP_PingHud");
@@ -72,6 +82,64 @@ namespace WorldboxMP.Client.UI
             prt.sizeDelta = new Vector2(420f, 26f);
             prt.anchoredPosition = new Vector2(0f, -36f);
             _pauseLabel.text = "";
+
+            // World-transfer progress bar: dark strip + warm fill + label, top-center.
+            _barRoot = new GameObject("WBMP_TransferBar", typeof(Image));
+            _barRoot.transform.SetParent(canvasGo.transform, false);
+            var bbg = _barRoot.GetComponent<Image>();
+            bbg.color = new Color(0.06f, 0.06f, 0.09f, 0.85f);
+            bbg.raycastTarget = false;
+            var brt = (RectTransform)_barRoot.transform;
+            brt.anchorMin = brt.anchorMax = new Vector2(0.5f, 1f);
+            brt.pivot = new Vector2(0.5f, 1f);
+            brt.sizeDelta = new Vector2(340f, 18f);
+            brt.anchoredPosition = new Vector2(0f, -62f);
+
+            var fillGo = new GameObject("Fill", typeof(Image));
+            fillGo.transform.SetParent(_barRoot.transform, false);
+            var fimg = fillGo.GetComponent<Image>();
+            fimg.color = new Color(1f, 0.72f, 0.25f, 0.95f);
+            fimg.raycastTarget = false;
+            _barFill = (RectTransform)fillGo.transform;
+            _barFill.anchorMin = new Vector2(0f, 0f);
+            _barFill.anchorMax = new Vector2(1f, 1f);
+            _barFill.offsetMin = new Vector2(2f, 2f);
+            _barFill.offsetMax = new Vector2(-2f, -2f);
+            _barFill.pivot = new Vector2(0f, 0.5f);
+            _barFill.localScale = new Vector3(0f, 1f, 1f);
+
+            var btGo = new GameObject("Label", typeof(Text));
+            btGo.transform.SetParent(_barRoot.transform, false);
+            _barText = btGo.GetComponent<Text>();
+            OT.InitializeCommonText(_barText);
+            UiKit.ApplyGameFont(_barText);
+            _barText.alignment = TextAnchor.MiddleCenter;
+            _barText.horizontalOverflow = HorizontalWrapMode.Overflow;
+            _barText.fontSize = 11;
+            _barText.raycastTarget = false;
+            _barText.color = Color.white;
+            var btrt = _barText.rectTransform;
+            btrt.anchorMin = Vector2.zero; btrt.anchorMax = Vector2.one;
+            btrt.offsetMin = btrt.offsetMax = Vector2.zero;
+
+            _barRoot.SetActive(false);
+        }
+
+        /// <summary>Show/update the transfer bar (pct01 in 0..1). Called by MirrorManager
+        /// only for large transfers; small resyncs never surface UI.</summary>
+        public static void SetTransfer(float pct01, string label)
+        {
+            _transferPct = Mathf.Clamp01(pct01);
+            _transferLabel = label ?? "";
+            TransferStatus = _transferLabel;   // REST /state mirrors the label
+        }
+
+        /// <summary>Hide the transfer bar.</summary>
+        public static void ClearTransfer()
+        {
+            _transferPct = -1f;
+            _transferLabel = "";
+            TransferStatus = "";
         }
 
         /// <summary>Center-top banner while a world snapshot transfer is in flight
@@ -86,9 +154,18 @@ namespace WorldboxMP.Client.UI
             if (Input.GetKeyDown(KeyCode.F3)) _visible = !_visible;   // toggle the net HUD
 
             if (_pauseLabel != null)
-                _pauseLabel.text = !string.IsNullOrEmpty(TransferStatus)
-                    ? TransferStatus
-                    : (Mirror.MirrorManager.KingPaused ? "⏸  The God King has paused the game" : "");
+                _pauseLabel.text = Mirror.MirrorManager.KingPaused ? "⏸  The God King has paused the game" : "";
+
+            if (_barRoot != null)
+            {
+                bool show = _transferPct >= 0f;
+                if (_barRoot.activeSelf != show) _barRoot.SetActive(show);
+                if (show)
+                {
+                    _barFill.localScale = new Vector3(_transferPct, 1f, 1f);
+                    _barText.text = _transferLabel;
+                }
+            }
 
             if (!_visible) { _label.text = ""; return; }
 
