@@ -16,7 +16,8 @@ packages/
 # Local secrets / config overrides
 appsettings.Local.json
 *.local.json
-.env
+# NOTE: src/Client/.env is COMMITTED on purpose - it is the build-time baked
+# client config (official server origin), not a runtime file and not a secret.
 
 # OS
 Thumbs.db

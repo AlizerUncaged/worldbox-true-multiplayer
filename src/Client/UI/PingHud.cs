@@ -186,7 +186,9 @@ namespace WorldboxMP.Client.UI
 
             // green < 80ms, yellow < 160ms, red otherwise.
             _label.color = ms < 80 ? new Color(0.5f, 1f, 0.5f) : (ms < 160 ? new Color(1f, 0.9f, 0.4f) : new Color(1f, 0.5f, 0.5f));
-            _label.text = ver + "  |  " + traffic + "  |  ping " + ms + " ms";
+            string upd = Net.UpdateChecker.UpdateAvailable;
+            _label.text = ver + "  |  " + traffic + "  |  ping " + ms + " ms"
+                          + (upd != null ? "  |  UPDATE " + upd + " available!" : "");
         }
     }
 }

@@ -136,6 +136,15 @@
     <ModVersion>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</ModVersion>
   </PropertyGroup>
 
+  <!-- Bake src/Client/.env into generated constants (BuildConfig.g.cs in obj/):
+       the official server origin ships inside the DLL, never as a file. -->
+  <Target Name="GenerateBuildConfig" BeforeTargets="CoreCompile">
+    <Exec Command="python &quot;$(MSBuildProjectDirectory)\bake_env.py&quot; &quot;$(MSBuildProjectDirectory)\.env&quot; &quot;$(IntermediateOutputPath)BuildConfig.g.cs&quot;" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildConfig.g.cs" />
+    </ItemGroup>
+  </Target>
+
   <!-- Debug auto-deploy: copy the WHOLE client output (Client + Shared + LiteNetLib +
        mod.json) into the live Mods folder so deploys never go out of sync. -->
   <Target Name="DeployToMods" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">

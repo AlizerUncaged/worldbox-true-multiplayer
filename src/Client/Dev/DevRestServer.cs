@@ -380,6 +380,7 @@ namespace WorldboxMP.Client.Dev
             sb.Append("{");
             sb.Append($"\"version\":\"{Esc(ModInfo.Display)}\",");
             sb.Append($"\"epoch\":{(mm != null ? mm.WorldEpoch : 0)},\"transfer\":\"{Esc(WorldboxMP.Client.UI.PingHud.TransferStatus ?? "")}\",");
+            sb.Append($"\"update\":\"{Esc(WorldboxMP.Client.Net.UpdateChecker.UpdateAvailable ?? "")}\",");
             sb.Append($"\"role\":\"{role}\",\"connState\":\"{net?.State}\",\"loggedIn\":{(net != null && net.LoggedIn ? "true" : "false")},");
             sb.Append($"\"roomId\":\"{Esc(net?.RoomId ?? "")}\",\"inRoom\":{(net != null && net.InRoom ? "true" : "false")},\"isKing\":{(net != null && net.IsKing ? "true" : "false")},");
             // roster as THIS client sees it (verifies the roster push reaches non-kings too)

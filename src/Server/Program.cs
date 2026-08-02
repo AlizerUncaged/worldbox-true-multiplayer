@@ -9,16 +9,22 @@ namespace WorldboxMP.Server
 {
     internal static class Program
     {
-        // Config precedence: env vars WBMP_MONGO / WBMP_PORT > appsettings.json > built-in defaults.
-        // Credentials (the Mongo connection string) live in appsettings.json next to the exe
-        // (copied from src/Server on build). The password is %-encoded in the URI (?! -> %3F!);
-        // the db name (worldboxmp) is supplied in the connection string.
-        private const string DefaultMongo = "mongodb://127.0.0.1:27017/worldboxmp";
+        // Config precedence: env vars > appsettings.json > built-in defaults.
+        //   WBMP_CONNECTION_STRING / WBMP_DATABASE_BRAND / WBMP_PORT / WBMP_LATEST_VERSION
+        //   (legacy WBMP_MONGO still accepted and implies DatabaseBrand=mongodb)
+        // Default brand is sqlite so a fresh checkout runs with ZERO external services:
+        // one db file appears next to the exe. The official instance flips to mongodb
+        // in its own appsettings/env.
+        private const string DefaultSqlite = "Data Source=worldbox-multiplayer-local.db";
 
         private sealed class AppSettings
         {
-            public string Mongo { get; set; }
+            public string ConnectionString { get; set; }
+            public string DatabaseBrand { get; set; }
             public int Port { get; set; }
+            public string LatestVersion { get; set; }
+            public string MinimumVersion { get; set; }
+            public string Mongo { get; set; }   // legacy field (pre-brand); implies mongodb
         }
 
         private static AppSettings LoadAppSettings()
@@ -64,49 +70,78 @@ namespace WorldboxMP.Server
         private static void Run()
         {
             var settings = LoadAppSettings();
-            string mongo = Environment.GetEnvironmentVariable("WBMP_MONGO")
-                           ?? (string.IsNullOrWhiteSpace(settings.Mongo) ? DefaultMongo : settings.Mongo);
+
+            // Legacy fallbacks first so new-style values always win.
+            string legacyMongo = Environment.GetEnvironmentVariable("WBMP_MONGO") ?? settings.Mongo;
+
+            string brand = (Environment.GetEnvironmentVariable("WBMP_DATABASE_BRAND")
+                            ?? settings.DatabaseBrand
+                            ?? (string.IsNullOrWhiteSpace(legacyMongo) ? "sqlite" : "mongodb")).Trim().ToLowerInvariant();
+            string conn = Environment.GetEnvironmentVariable("WBMP_CONNECTION_STRING")
+                          ?? (string.IsNullOrWhiteSpace(settings.ConnectionString) ? null : settings.ConnectionString)
+                          ?? legacyMongo
+                          ?? DefaultSqlite;
             int port = int.TryParse(Environment.GetEnvironmentVariable("WBMP_PORT"), out var p) ? p
                        : (settings.Port > 0 ? settings.Port : NetProtocol.DefaultPort);
 
+            ApiHost.LatestVersion = Environment.GetEnvironmentVariable("WBMP_LATEST_VERSION") ?? settings.LatestVersion ?? "";
+            ApiHost.MinimumVersion = Environment.GetEnvironmentVariable("WBMP_MIN_VERSION") ?? settings.MinimumVersion ?? "";
+
             Console.WriteLine("=== WorldBox Multiplayer Server ===");
 
-            Database db;
+            IPlayerStore db = brand switch
+            {
+                "sqlite" => new SqlitePlayerStore(conn),
+                "mongodb" => new MongoPlayerStore(conn),
+                _ => null,
+            };
+            if (db == null)
+            {
+                Console.WriteLine($"ERROR: unknown DatabaseBrand '{brand}' - use \"sqlite\" or \"mongodb\".");
+                Pause();
+                return;
+            }
+
             try
             {
-                Console.WriteLine("Connecting to MongoDB (timeout 12s)...");
-                db = new Database(mongo);
-                db.Ping();
-                Console.WriteLine("MongoDB connected.");
-                db.EnsureIndexes();   // non-fatal
+                Console.WriteLine($"Opening database: {db.Describe} ...");
+                db.Init();
+                Console.WriteLine("Database ready.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine("\nERROR: could not connect to MongoDB.\n" + ex);
-
-                bool timedOut = ex is TimeoutException
-                    || ex.Message.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0
-                    || ex.Message.IndexOf("selecting a server", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (timedOut)
+                Console.WriteLine("\nERROR: could not open the database.\n" + ex);
+                if (brand == "mongodb")
                 {
-                    Console.WriteLine();
-                    Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
-                    Console.WriteLine(" CONNECTION TIMED OUT - whitelist your IP in MongoDB Atlas! ".Pastel(System.Drawing.Color.Gold));
-                    Console.WriteLine(" Atlas → Network Access → Add IP Address → 'Add Current IP'  ".Pastel(System.Drawing.Color.Gold));
-                    Console.WriteLine(" (or 0.0.0.0/0 to allow all). Atlas drops your IP regularly. ".Pastel(System.Drawing.Color.Gold));
-                    Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
+                    bool timedOut = ex is TimeoutException
+                        || ex.Message.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0
+                        || ex.Message.IndexOf("selecting a server", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (timedOut)
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
+                        Console.WriteLine(" CONNECTION TIMED OUT - whitelist your IP in MongoDB Atlas! ".Pastel(System.Drawing.Color.Gold));
+                        Console.WriteLine(" Atlas → Network Access → Add IP Address → 'Add Current IP'  ".Pastel(System.Drawing.Color.Gold));
+                        Console.WriteLine(" (or 0.0.0.0/0 to allow all). Atlas drops your IP regularly. ".Pastel(System.Drawing.Color.Gold));
+                        Console.WriteLine("============================================================".Pastel(System.Drawing.Color.Gold));
+                    }
+                    else
+                    {
+                        Console.WriteLine("\nLikely the cluster is paused, or the connection string/credentials are wrong.");
+                    }
+                    Console.WriteLine("Tip: \"DatabaseBrand\": \"sqlite\" needs no external database at all.");
                 }
-                else
-                {
-                    Console.WriteLine("\nLikely the Atlas cluster is paused, or the connection string/credentials are wrong.");
-                }
-                Console.WriteLine("Override with env WBMP_MONGO=<connection string> and restart.");
+                Console.WriteLine("Override with env WBMP_CONNECTION_STRING / WBMP_DATABASE_BRAND and restart.");
                 Pause();   // do not exit silently - wait so the error is readable
                 return;
             }
 
             var server = new GameServer(db, port);
             server.Start();
+
+            // REST api on the same port number, TCP side (version checks, health).
+            try { ApiHost.Start(port); }
+            catch (Exception e) { Console.WriteLine("WARN: REST api failed to start (" + e.Message + ") - game server continues without it."); }
 
             using var stop = new ManualResetEventSlim(false);
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Set(); };

@@ -30,7 +30,7 @@ namespace WorldboxMP.Server.Net
         private readonly LinkedList<LogEntry> _log = new();
         private const int MaxLog = 500;
 
-        public GameServer(Database db, int port)
+        public GameServer(IPlayerStore db, int port)
         {
             _port = port;
             _auth = new AuthService(db);

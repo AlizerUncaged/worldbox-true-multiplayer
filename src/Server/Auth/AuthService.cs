@@ -1,6 +1,5 @@
 using System;
 using System.Security.Cryptography;
-using MongoDB.Driver;
 using WorldboxMP.Server.Data;
 
 namespace WorldboxMP.Server.Auth
@@ -32,9 +31,9 @@ namespace WorldboxMP.Server.Auth
         private const int SaltBytes = 16;
         private const int KeyBytes = 32;
 
-        private readonly Database _db;
+        private readonly IPlayerStore _db;
 
-        public AuthService(Database db) => _db = db;
+        public AuthService(IPlayerStore db) => _db = db;
 
         public AuthResult Register(string username, string password)
         {
@@ -47,7 +46,7 @@ namespace WorldboxMP.Server.Auth
                 return AuthResult.Fail("Password must be 4-64 characters.");
 
             string lower = username.ToLowerInvariant();
-            if (_db.Players.Find(p => p.UsernameLower == lower).Any())
+            if (_db.FindByUsernameLower(lower) != null)
                 return AuthResult.Fail("Username is already taken.");
 
             var (hash, salt) = HashPassword(password);
@@ -61,15 +60,8 @@ namespace WorldboxMP.Server.Auth
                 CreatedAt = DateTime.UtcNow,
             };
 
-            try
-            {
-                _db.Players.InsertOne(record);
-            }
-            catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
-            {
-                // Lost a race on the unique index.
+            if (!_db.TryInsert(record))   // race-safe: unique index/constraint in the store
                 return AuthResult.Fail("Username is already taken.");
-            }
 
             return AuthResult.Success(record);
         }
@@ -80,16 +72,14 @@ namespace WorldboxMP.Server.Auth
             password = password ?? "";
 
             string lower = username.ToLowerInvariant();
-            var player = _db.Players.Find(p => p.UsernameLower == lower).FirstOrDefault();
+            var player = _db.FindByUsernameLower(lower);
             if (player == null)
                 return AuthResult.Fail("Invalid username or password.");
 
             if (!VerifyPassword(password, player.PasswordHash, player.PasswordSalt))
                 return AuthResult.Fail("Invalid username or password.");
 
-            _db.Players.UpdateOne(
-                Builders<PlayerRecord>.Filter.Eq(p => p.Id, player.Id),
-                Builders<PlayerRecord>.Update.Set(p => p.LastLogin, DateTime.UtcNow));
+            _db.TouchLastLogin(player);
 
             return AuthResult.Success(player);
         }

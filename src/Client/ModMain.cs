@@ -14,9 +14,6 @@ namespace WorldboxMP.Client
     /// </summary>
     public class ModMain : BasicMod<ModMain>
     {
-        public const string ServerHost = "127.0.0.1";
-        public const int ServerPort = NetProtocol.DefaultPort; // 40441
-
         protected override void OnModLoad()
         {
 #if DEBUG
@@ -45,6 +42,7 @@ namespace WorldboxMP.Client
             int port = Net.ServerConfig.Port;
             Step("connect", () => net.Connect(host, port));
             ModLog.Info($"Connecting to {host}:{port} (F9 toggles the manager).");
+            Step("update-check", Net.UpdateChecker.Start);
 
 #if DEBUG
             Step("dev-autologin", Dev.DevAutoLogin.TryStart);
