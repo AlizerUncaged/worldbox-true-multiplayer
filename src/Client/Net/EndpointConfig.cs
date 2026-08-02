@@ -10,7 +10,7 @@ namespace WorldboxMP.Client.Net
     /// </summary>
     public static class EndpointConfig
     {
-        /// <summary>Game/api host, e.g. "multiplayer-worlbox.alizer.xyz" (LiteNetLib
+        /// <summary>Game/api host, e.g. "multiplayer-worldbox.alizer.xyz" (LiteNetLib
         /// resolves hostnames, so DNS changes need no client rebuild).</summary>
         public static readonly string Host;
 
@@ -18,7 +18,7 @@ namespace WorldboxMP.Client.Net
         public static readonly int Port;
 
         /// <summary>Origin for REST calls, no trailing slash, e.g.
-        /// "https://multiplayer-worlbox.alizer.xyz".</summary>
+        /// "https://multiplayer-worldbox.alizer.xyz".</summary>
         public static readonly string ApiBase;
 
         static EndpointConfig()

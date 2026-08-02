@@ -108,7 +108,7 @@ become its God King) or join one with a 4-letter code.
 runtime) holds the single source of truth:
 
 ```
-MAIN_SERVER_SOURCE=https://multiplayer-worlbox.alizer.xyz
+MAIN_SERVER_SOURCE=https://multiplayer-worldbox.alizer.xyz
 ```
 
 The scheme picks the shared port (`https` = 443, `http` = 80, an explicit
