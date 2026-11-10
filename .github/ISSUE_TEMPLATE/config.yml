@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and discussion
+    url: https://github.com/AlizerUncaged/worldbox-multiplayer/discussions
+    about: Ask how something works or share what you're building.
+  - name: Documentation
+    url: https://github.com/AlizerUncaged/worldbox-multiplayer/wiki
+    about: Install, play, host a server, use the SDK.

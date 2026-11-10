@@ -1,0 +1,16 @@
+name: Idea or feature request
+description: Suggest something new for players, hosts or modders
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would you like, and why would it make multiplayer better?
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: How it could work, examples, mockups.

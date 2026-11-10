@@ -18,6 +18,7 @@
   <img alt="Server: .NET 10" src="https://img.shields.io/badge/server-.NET%2010-7c4dff">
   <img alt="Protocol WBMP/4" src="https://img.shields.io/badge/protocol-WBMP%2F4-22c1ee">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f">
+  <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-ff8a00"></a>
 </p>
 
 ---
@@ -149,7 +150,25 @@ The design is described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the
 [Extending the Mod](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/Extending-the-Mod)
 wiki page.
 
+## Contributing
+
+WorldBox Multiplayer is built in the open and every kind of help counts: playing and
+reporting bugs, testing sync with friends, fixing code, writing docs, making art, or
+building mods on the SDK.
+
+- **Start here:** [CONTRIBUTING.md](CONTRIBUTING.md) (setup, testing with two game
+  instances, how to send a pull request).
+- **Found a bug or out-of-sync world?** [Open an issue](https://github.com/AlizerUncaged/worldbox-multiplayer/issues/new/choose).
+- **Ideas and questions:** [Discussions](https://github.com/AlizerUncaged/worldbox-multiplayer/discussions).
+- **How the sync works:** [Extending the Mod](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/Extending-the-Mod).
+
+Thanks to everyone who has contributed:
+
+<a href="https://github.com/AlizerUncaged/worldbox-multiplayer/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=AlizerUncaged/worldbox-multiplayer" alt="Contributors">
+</a>
+
 ## License
 
-[MIT](LICENSE). © 2026 ALIZER. WorldBox Multiplayer is a fan project and is not affiliated
-with WorldBox or its developer.
+[MIT](LICENSE), by the WorldBox Multiplayer contributors. WorldBox Multiplayer is a fan
+project and is not affiliated with WorldBox or its developer.

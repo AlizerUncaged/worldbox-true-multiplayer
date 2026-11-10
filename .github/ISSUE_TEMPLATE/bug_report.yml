@@ -1,0 +1,36 @@
+name: Bug report
+description: Something broke, crashed, or the world looks different for different players
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: Steps, ideally starting from joining a room.
+      placeholder: |
+        1. Join a lobby as a player
+        2. The Owner uses ...
+        3. ...
+  - type: dropdown
+    id: role
+    attributes:
+      label: Your role in the room
+      options: [Owner, Player, Not in a room]
+  - type: input
+    id: version
+    attributes:
+      label: Mod version
+      description: Shown in the bottom-right corner of the game, e.g. beta-2026.11.10.1341
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Lines starting with [WBMP] from %USERPROFILE%\AppData\LocalLow\mkarpenko\WorldBox\Player.log
+      render: text

@@ -3,7 +3,7 @@ using System.Reflection;
 // The license travels with the shipped assembly: readable assembly metadata plus a public
 // constant. The class is skip-listed in obfuscar.xml so it stays readable verbatim.
 [assembly: AssemblyMetadata("LicenseNotice",
-    "WorldBox Multiplayer client. Open source under the MIT License, (c) 2026 ALIZER. " +
+    "WorldBox Multiplayer client. Open source under the MIT License, (c) WorldBox Multiplayer contributors. " +
     "Source, license and docs: https://github.com/AlizerUncaged/worldbox-multiplayer. " +
     "Modders: integrate through the public API, WorldboxMP.Client.Api.WbmpApi (PLUGINS.md).")]
 

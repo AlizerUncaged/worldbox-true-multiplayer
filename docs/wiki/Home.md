@@ -22,6 +22,13 @@ as it happens, and you can see each other's god hands moving over the map.
 - [SDK Examples](SDK-Examples): complete, copy-ready plugin code
 - [Extending the Mod](Extending-the-Mod): how the sync works and how to add to it
 
+## Contributing
+
+Everyone is welcome: bug reports, sync testing, code, docs, art and mods. Start with
+[CONTRIBUTING.md](https://github.com/AlizerUncaged/worldbox-multiplayer/blob/main/CONTRIBUTING.md)
+and [Extending the Mod](Extending-the-Mod), and say hi in
+[Discussions](https://github.com/AlizerUncaged/worldbox-multiplayer/discussions).
+
 ## Links
 
 - Source: <https://github.com/AlizerUncaged/worldbox-multiplayer>

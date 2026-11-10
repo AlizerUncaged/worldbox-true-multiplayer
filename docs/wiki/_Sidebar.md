@@ -14,3 +14,7 @@
 - [SDK API Reference](SDK-API-Reference)
 - [SDK Examples](SDK-Examples)
 - [Extending the Mod](Extending-the-Mod)
+
+**Contribute**
+- [Contributing guide](https://github.com/AlizerUncaged/worldbox-multiplayer/blob/main/CONTRIBUTING.md)
+- [Discussions](https://github.com/AlizerUncaged/worldbox-multiplayer/discussions)
