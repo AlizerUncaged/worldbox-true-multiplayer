@@ -34,6 +34,28 @@ namespace WorldboxMP.Client.UI
         private float _dbgTimer;
         private const float SendInterval = 0.05f;   // 20 Hz
 
+        public static PlayerCursors Instance { get; private set; }
+
+        /// <summary>Dev diagnostics: every remote cursor's state as JSON.</summary>
+        public string DebugJson()
+        {
+            var cam = Camera.main;
+            var sb = new System.Text.StringBuilder("{\"screen\":\"" + Screen.width + "x" + Screen.height + "\",\"cam\":" + (cam != null ? "true" : "false") + ",\"cursors\":[");
+            bool first = true;
+            foreach (var kv in _cursors)
+            {
+                var v = kv.Value;
+                Vector3 sp = cam != null ? cam.WorldToScreenPoint(new Vector3(v.WorldPos.x, v.WorldPos.y, 0f)) : Vector3.zero;
+                if (!first) sb.Append(","); first = false;
+                sb.Append("{\"name\":\"" + NameOf(kv.Key) + "\",\"world\":\"" + v.WorldPos.x.ToString("F1") + "," + v.WorldPos.y.ToString("F1")
+                    + "\",\"screen\":\"" + sp.x.ToString("F0") + "," + sp.y.ToString("F0") + "," + sp.z.ToString("F1")
+                    + "\",\"active\":" + (v.Root != null && v.Root.gameObject.activeInHierarchy ? "true" : "false")
+                    + ",\"sprite\":" + (v.Finger != null && v.Finger.sprite != null ? "true" : "false")
+                    + ",\"canvasOn\":" + (_canvas != null && _canvas.isActiveAndEnabled ? "true" : "false") + "}");
+            }
+            return sb.Append("]}").ToString();
+        }
+
         public static void Spawn()
         {
             var go = new GameObject("WBMP_Cursors");
@@ -43,6 +65,7 @@ namespace WorldboxMP.Client.UI
 
         private void Awake()
         {
+            Instance = this;
             var canvasGo = new GameObject("WBMP_CursorCanvas");
             canvasGo.transform.SetParent(transform, false);
             _canvas = canvasGo.AddComponent<Canvas>();
@@ -70,9 +93,21 @@ namespace WorldboxMP.Client.UI
                 if (!v.HasPos || cam == null) { v.Root.gameObject.SetActive(false); continue; }
                 v.WorldPos = Vector2.Lerp(v.WorldPos, v.WorldTarget, t);
                 Vector3 sp = cam.WorldToScreenPoint(new Vector3(v.WorldPos.x, v.WorldPos.y, 0f));
-                bool visible = sp.z > 0f;   // in front of the camera
+                // Depth only matters for perspective cameras. WorldBox's camera is orthographic
+                // and on followers can sit exactly on the world plane (z = 0), which made every
+                // remote cursor count as "behind the camera" and vanish.
+                bool visible = cam.orthographic || sp.z > 0f;
                 v.Root.gameObject.SetActive(visible);
-                if (visible) v.Root.position = new Vector3(sp.x, sp.y, 0f);
+                if (!visible) continue;
+                // Off-screen players stay findable: pin them to the screen edge, dimmed.
+                const float margin = 28f;
+                bool onScreen = sp.x >= 0f && sp.x <= Screen.width && sp.y >= 0f && sp.y <= Screen.height;
+                float x = Mathf.Clamp(sp.x, margin, Screen.width - margin);
+                float y = Mathf.Clamp(sp.y, margin + 30f, Screen.height - margin);
+                v.Root.position = new Vector3(x, y, 0f);
+                float alpha = onScreen ? 1f : 0.55f;
+                if (v.Finger != null) v.Finger.color = new Color(1f, 1f, 1f, alpha);
+                if (v.Label != null) { var c = v.Label.color; c.a = alpha; v.Label.color = c; }
             }
 
             if (net == null || !net.InRoom || net.State != ConnState.Connected || cam == null) return;

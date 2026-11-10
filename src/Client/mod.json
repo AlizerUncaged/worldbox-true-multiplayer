@@ -3,6 +3,8 @@
     "author": "ALIZER",
     "version": "2026.07.30.0000",
     "description": "Real-time multiplayer for WorldBox: shared worlds, rooms, and live mirroring.",
+    "iconPath": "icon.png",
+    "RepoUrl": "https://github.com/AlizerUncaged/worldbox-multiplayer",
     "ModType": "COMPILED_NEOMOD",
     "Dependencies": [],
     "OptionalDependencies": [],

@@ -7,35 +7,71 @@ using WorldboxMP.Shared.Protocol;
 
 namespace WorldboxMP.Server.Rooms
 {
+    /// <summary>Room limits and the server's permanent lobbies (from appsettings / env).</summary>
+    public class RoomSettings
+    {
+        /// <summary>Names of the always-open server lobbies, in order: 0000, 0001, ...</summary>
+        public List<string> Lobbies { get; set; } = new() { "Lobby" };
+
+        /// <summary>Member cap for every room (lobbies and player rooms). 0 = unlimited.</summary>
+        public int MaxPlayersPerRoom { get; set; } = 16;
+
+        /// <summary>Cap on player-created rooms (lobbies don't count). 0 = unlimited.</summary>
+        public int MaxRooms { get; set; } = 200;
+    }
+
     /// <summary>
     /// Owns every live room. Single-threaded (driven from the network poll loop).
-    /// Handles creation with collision-free shareable ids, joins, leaves with king
-    /// succession, the public listing, and moderation.
+    /// A server hosts any number of permanent lobbies (configured, never removed) plus
+    /// player-created rooms (collision-free 4-char codes, removed when empty).
+    /// Handles joins, leaves with king succession, the public listing, and moderation.
     /// </summary>
     public class RoomManager
     {
         private readonly Dictionary<string, Room> _rooms = new(StringComparer.OrdinalIgnoreCase);
         private readonly NetPacketProcessor _proc;
         private readonly Action<string> _log;
+        private readonly RoomSettings _settings;
 
-        public RoomManager(NetPacketProcessor proc, Action<string> log)
+        public RoomManager(NetPacketProcessor proc, Action<string> log, RoomSettings settings)
         {
             _proc = proc;
             _log = log;
-            // Room 0 is always present and permanent.
-            var room0 = new Room(NetProtocol.Room0Id, "Lobby", permanent: true) { Visibility = RoomVisibility.Public };
-            _rooms[room0.ShareableId] = room0;
-            _log($"Created permanent room {room0.ShareableId} ('{room0.Name}').");
+            _settings = settings ?? new RoomSettings();
+
+            var names = _settings.Lobbies?.Select(n => SafeText.Clean(n, 40)).Where(n => n.Length > 0).ToList();
+            if (names == null || names.Count == 0) names = new List<string> { "Lobby" };
+            for (int i = 0; i < names.Count && i < 100; i++)
+            {
+                var lobby = new Room(i.ToString("D4"), names[i], _settings.MaxPlayersPerRoom, permanent: true)
+                    { Visibility = RoomVisibility.Public };
+                _rooms[lobby.ShareableId] = lobby;
+                _log($"Lobby {lobby.ShareableId} ('{lobby.Name}') open.");
+            }
         }
 
         public Room Find(string shareableId) =>
-            shareableId != null && _rooms.TryGetValue(shareableId, out var r) ? r : null;
+            shareableId != null && _rooms.TryGetValue(shareableId.Trim(), out var r) ? r : null;
 
+        public int PlayerRoomCount => _rooms.Values.Count(r => !r.IsPermanent);
+
+        public IEnumerable<Room> All => _rooms.Values;
+
+        /// <summary>Admin: empty a room (everyone gets <paramref name="reason"/>). Player
+        /// rooms disappear once empty; lobbies stay open.</summary>
+        public void CloseRoom(Room room, string reason)
+        {
+            foreach (var m in room.Members.ToList())
+                LeaveRoom(m.Session, notify: true, reason: reason);
+        }
+
+        /// <summary>Random 4-char code that is never all digits (digits-only ids are
+        /// reserved for lobbies, so a lobby added later can't collide with a live room).</summary>
         private string GenerateUniqueId()
         {
             string id;
             do { id = ShareableId.Generate(NetProtocol.ShareableIdLength); }
-            while (_rooms.ContainsKey(id));
+            while (_rooms.ContainsKey(id) || id.All(char.IsDigit));
             return id;
         }
 
@@ -48,21 +84,29 @@ namespace WorldboxMP.Server.Rooms
                 error = $"Password too long (max {NetProtocol.MaxPasswordLength}).";
                 return null;
             }
+            if (_settings.MaxRooms > 0 && PlayerRoomCount >= _settings.MaxRooms)
+            {
+                error = "The server is at its room limit - join a lobby or try later.";
+                return null;
+            }
+            if (visibility != RoomVisibility.Public && visibility != RoomVisibility.Unlisted)
+                visibility = RoomVisibility.Public;
 
             // Creator leaves any current room first.
-            LeaveRoom(session);
+            LeaveRoom(session, notify: false);
 
-            name = string.IsNullOrWhiteSpace(name) ? $"{session.Username}'s room" : name.Trim();
-            if (name.Length > 40) name = name.Substring(0, 40);
+            name = SafeText.Clean(name, 40);
+            if (name.Length == 0) name = $"{session.Username}'s world";
 
-            var room = new Room(GenerateUniqueId(), name) { Visibility = visibility, KingId4 = session.Id4 };
+            var room = new Room(GenerateUniqueId(), name, _settings.MaxPlayersPerRoom)
+                { Visibility = visibility, KingId4 = session.Id4 };
             room.SetPassword(password);
             _rooms[room.ShareableId] = room;
 
             room.Add(session, RoomRole.King);
             session.CurrentRoom = room;
 
-            _log($"{session.Username} created room {room.ShareableId} ('{room.Name}', {visibility}, pw={room.HasPassword}).");
+            Note(room, $"{session.Username} created room {room.ShareableId} ('{room.Name}', {visibility}, pw={room.HasPassword}).");
             PushRoster(room);
             return room;
         }
@@ -72,33 +116,44 @@ namespace WorldboxMP.Server.Rooms
         {
             error = null;
             var room = Find(shareableId);
-            if (room == null) { error = "Room not found."; return null; }
+            if (room == null) { error = "Room not found - check the code."; return null; }
             if (room.Contains(session.Id4)) return room; // already in it
-            if (!room.CheckPassword(password)) { error = "Wrong password."; return null; }
+            if (!room.CheckPassword(password))
+            {
+                error = string.IsNullOrEmpty(password) ? "This room needs a password." : "Wrong password.";
+                return null;
+            }
+            if (room.IsFull) { error = $"Room is full ({room.MaxPlayers} players)."; return null; }
 
-            LeaveRoom(session);
+            LeaveRoom(session, notify: false);
 
-            // First player to enter an unclaimed permanent room (e.g. room 0) becomes its king.
+            // First player into an empty room with no king (a lobby) holds its world.
             RoomRole role = (room.KingId4 == null && room.IsEmpty) ? RoomRole.King : RoomRole.Player;
             if (role == RoomRole.King) room.KingId4 = session.Id4;
 
             room.Add(session, role);
             session.CurrentRoom = room;
 
-            _log($"{session.Username} joined room {room.ShareableId} as {role}.");
+            Note(room, $"{session.Username} joined room {room.ShareableId} as {role}.");
             PushRoster(room);
             return room;
         }
 
         // ── Leave (with king succession) ───────────────────────────────────
-        public void LeaveRoom(Session session)
+        /// <param name="notify">Tell the leaving client with a <see cref="RoomLeft"/>
+        /// (false when it is switching rooms or already gone).</param>
+        /// <param name="reason">Shown to the leaving player (empty = voluntary).</param>
+        public void LeaveRoom(Session session, bool notify = true, string reason = "")
         {
             var room = session.CurrentRoom;
             if (room == null) return;
 
             bool wasKing = room.KingId4 == session.Id4;
             room.Remove(session.Id4);
+            if (!room.IsEmpty) Note(room, $"{session.Username} left room {room.ShareableId}.");
             session.CurrentRoom = null;
+            if (notify && session.Peer.ConnectionState == LiteNetLib.ConnectionState.Connected)
+                session.Peer.Send(_proc, new RoomLeft { ShareableId = room.ShareableId, Reason = reason ?? "" });
 
             if (room.IsEmpty)
             {
@@ -118,7 +173,7 @@ namespace WorldboxMP.Server.Rooms
                            ?? room.Members.First();
                 heir.Role = RoomRole.King;
                 room.KingId4 = heir.Id4;
-                _log($"Room {room.ShareableId}: king left; {heir.Username} is the new king.");
+                Note(room, $"Room {room.ShareableId}: owner left; {heir.Username} is the new owner.");
             }
 
             PushRoster(room);
@@ -140,28 +195,28 @@ namespace WorldboxMP.Server.Rooms
             // Admins cannot act on other admins or the king; only the king can.
             if (me.Role == RoomRole.Admin && target.Role != RoomRole.Player)
             {
-                error = "Only the king can moderate admins.";
+                error = "Only the room owner can moderate admins.";
                 return false;
             }
 
             switch (action)
             {
                 case ModerationRequest.ACTION_KICK:
-                    KickFromRoom(room, target, "Kicked by " + me.Username);
-                    _log($"{me.Username} kicked {target.Username} from {room.ShareableId}.");
+                    LeaveRoom(target.Session, notify: true, reason: "Kicked by " + me.Username);
+                    Note(room, $"{me.Username} kicked {target.Username} from {room.ShareableId}.");
                     break;
 
                 case ModerationRequest.ACTION_PROMOTE:
-                    if (me.Role != RoomRole.King) { error = "Only the king can promote."; return false; }
+                    if (me.Role != RoomRole.King) { error = "Only the room owner can promote."; return false; }
                     if (target.Role == RoomRole.Player) target.Role = RoomRole.Admin;
-                    _log($"{me.Username} promoted {target.Username} to admin.");
+                    Note(room, $"{me.Username} promoted {target.Username} to admin.");
                     PushRoster(room);
                     break;
 
                 case ModerationRequest.ACTION_DEMOTE:
-                    if (me.Role != RoomRole.King) { error = "Only the king can demote."; return false; }
+                    if (me.Role != RoomRole.King) { error = "Only the room owner can demote."; return false; }
                     if (target.Role == RoomRole.Admin) target.Role = RoomRole.Player;
-                    _log($"{me.Username} demoted {target.Username} to player.");
+                    Note(room, $"{me.Username} demoted {target.Username} to player.");
                     PushRoster(room);
                     break;
 
@@ -172,20 +227,23 @@ namespace WorldboxMP.Server.Rooms
             return true;
         }
 
-        private void KickFromRoom(Room room, Member target, string reason)
+        /// <summary>Console + the room's own log (readable in-game by its players).</summary>
+        private void Note(Room room, string text)
         {
-            var session = target.Session;
-            target.Session.Peer.Send(_proc, new RoomError { Message = reason });
-            // Reuse LeaveRoom for clean succession/empty handling.
-            LeaveRoom(session);
+            _log(text);
+            room.AddLog(new LogEntry { UnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Text = text });
         }
 
         // ── Listing & roster push ──────────────────────────────────────────
+        /// <summary>Lobbies first (in configured order), then public rooms by size.</summary>
         public List<RoomSummary> ListPublic()
         {
             return _rooms.Values
                 .Where(r => r.Visibility == RoomVisibility.Public)
-                .OrderByDescending(r => r.Count)
+                .OrderByDescending(r => r.IsPermanent)
+                .ThenBy(r => r.IsPermanent ? r.ShareableId : "")
+                .ThenByDescending(r => r.Count)
+                .Take(200)
                 .Select(r => r.BuildSummary())
                 .ToList();
         }

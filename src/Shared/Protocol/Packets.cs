@@ -25,9 +25,20 @@ namespace WorldboxMP.Shared.Protocol
         public string Name = "";
         public int PlayerCount;
         public bool HasPassword;
+        public int MaxPlayers;             // 0 = no cap
+        public string KingName = "";       // empty while nobody holds the world
+        public bool IsLobby;               // server-defined permanent lobby (never removed)
 
-        public void Serialize(NetDataWriter w) { w.Put(ShareableId); w.Put(Name); w.Put(PlayerCount); w.Put(HasPassword); }
-        public void Deserialize(NetDataReader r) { ShareableId = r.GetString(); Name = r.GetString(); PlayerCount = r.GetInt(); HasPassword = r.GetBool(); }
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(ShareableId); w.Put(Name); w.Put(PlayerCount); w.Put(HasPassword);
+            w.Put(MaxPlayers); w.Put(KingName); w.Put(IsLobby);
+        }
+        public void Deserialize(NetDataReader r)
+        {
+            ShareableId = r.GetString(); Name = r.GetString(); PlayerCount = r.GetInt(); HasPassword = r.GetBool();
+            MaxPlayers = r.GetInt(); KingName = r.GetString(); IsLobby = r.GetBool();
+        }
     }
 
     /// <summary>One server log line.</summary>
@@ -56,8 +67,25 @@ namespace WorldboxMP.Shared.Protocol
     {
         public string Username = "";
         public string Password = "";
-        public void Serialize(NetDataWriter w) { w.Put(Username); w.Put(Password); }
-        public void Deserialize(NetDataReader r) { Username = r.GetString(); Password = r.GetString(); }
+        public bool Remember;         // ask the server for a session token (auto-login next time)
+        public void Serialize(NetDataWriter w) { w.Put(Username); w.Put(Password); w.Put(Remember); }
+        public void Deserialize(NetDataReader r) { Username = r.GetString(); Password = r.GetString(); Remember = r.GetBool(); }
+    }
+
+    /// <summary>Log in with a session token from an earlier "remember me" login.</summary>
+    public class TokenLoginRequest : INetSerializable
+    {
+        public string Token = "";
+        public void Serialize(NetDataWriter w) { w.Put(Token); }
+        public void Deserialize(NetDataReader r) { Token = r.GetString(); }
+    }
+
+    /// <summary>Log out: the server forgets the session and revokes its token (if any).</summary>
+    public class LogoutRequest : INetSerializable
+    {
+        public string Token = "";
+        public void Serialize(NetDataWriter w) { w.Put(Token); }
+        public void Deserialize(NetDataReader r) { Token = r.GetString(); }
     }
 
     public class AuthResponse : INetSerializable
@@ -66,8 +94,10 @@ namespace WorldboxMP.Shared.Protocol
         public string Message = "";
         public string Id4 = "";       // external player id (Guid v4), empty on failure
         public string Username = "";
-        public void Serialize(NetDataWriter w) { w.Put(Ok); w.Put(Message); w.Put(Id4); w.Put(Username); }
-        public void Deserialize(NetDataReader r) { Ok = r.GetBool(); Message = r.GetString(); Id4 = r.GetString(); Username = r.GetString(); }
+        public string Token = "";     // session token when Remember was requested (or a token login rotated it)
+        public bool ViaToken;         // this answers a TokenLoginRequest (a failure means: forget the token)
+        public void Serialize(NetDataWriter w) { w.Put(Ok); w.Put(Message); w.Put(Id4); w.Put(Username); w.Put(Token); w.Put(ViaToken); }
+        public void Deserialize(NetDataReader r) { Ok = r.GetBool(); Message = r.GetString(); Id4 = r.GetString(); Username = r.GetString(); Token = r.GetString(); ViaToken = r.GetBool(); }
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -105,6 +135,24 @@ namespace WorldboxMP.Shared.Protocol
         public byte MyRole;                // RoomRole of the receiving player
         public void Serialize(NetDataWriter w) { w.Put(ShareableId); w.Put(Name); w.Put(MyRole); }
         public void Deserialize(NetDataReader r) { ShareableId = r.GetString(); Name = r.GetString(); MyRole = r.GetByte(); }
+    }
+
+    /// <summary>Server → client: you are no longer in a room (kicked, replaced, room closed).
+    /// A voluntary leave is answered with this too, so the client has one exit path.</summary>
+    public class RoomLeft : INetSerializable
+    {
+        public string ShareableId = "";
+        public string Reason = "";         // empty for a voluntary leave
+        public void Serialize(NetDataWriter w) { w.Put(ShareableId); w.Put(Reason); }
+        public void Deserialize(NetDataReader r) { ShareableId = r.GetString(); Reason = r.GetString(); }
+    }
+
+    /// <summary>Server → client: an announcement from the server operator.</summary>
+    public class ServerNotice : INetSerializable
+    {
+        public string Text = "";
+        public void Serialize(NetDataWriter w) { w.Put(Text); }
+        public void Deserialize(NetDataReader r) { Text = r.GetString(); }
     }
 
     /// <summary>Generic room-operation failure (wrong password, full, not found, no permission...).</summary>

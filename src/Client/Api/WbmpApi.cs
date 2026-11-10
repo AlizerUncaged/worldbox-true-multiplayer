@@ -106,12 +106,9 @@ namespace WorldboxMP.Client.Api
             var net = NetClient.Instance;
             if (net == null) return;
             net.OnRoomJoined += _ => SafeInvoke(RoomJoined);
-            net.OnRosterChanged += () =>
-            {
-                SafeInvoke(RosterChanged);
-                if (!net.InRoom) SafeInvoke(RoomLeft);
-            };
-            net.OnStateChanged += s => { if (s == ConnState.Disconnected) SafeInvoke(RoomLeft); };
+            net.OnRosterChanged += () => { if (net.InRoom) SafeInvoke(RosterChanged); };
+            // One exit path: voluntary leave, kick, logout and connection loss all raise OnRoomLeft once.
+            net.OnRoomLeft += _ => SafeInvoke(RoomLeft);
         }
 
         internal static void DispatchInternal(PluginMsg m, bool senderIsKing)

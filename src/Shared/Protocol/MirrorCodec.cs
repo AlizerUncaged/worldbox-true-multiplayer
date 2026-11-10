@@ -29,9 +29,26 @@ namespace WorldboxMP.Shared.Protocol
     public struct TraitMsg { public long KingId; public string TraitId; public bool Add; }
     public struct MoveMsg { public long KingId; public int X; public int Y; }
     public struct ScalarMsg { public long Id; public int V; }
-    public struct ActorStateMsg { public long Id; public string Json; public string StatsJson; }
+    /// <summary>Mode Full: Json is the whole ActorData. Mode Patch: Json holds only the fields
+    /// that changed since the last send (may be empty), merged into the follower's copy.
+    /// StatsJson is the king's computed stats, empty when unchanged.</summary>
+    public struct ActorStateMsg { public long Id; public byte Mode; public string Json; public string StatsJson; }
+    public static class ActorStateMode { public const byte Full = 0; public const byte Patch = 1; }
     /// <summary>What a poll scalar batch carries (the 'kind' byte in WriteScalarBatch).</summary>
-    public static class PollKind { public const byte Age = 0; }
+    /// <summary>What a ScalarBatch carries. Vitals drift continuously in-place (no method to
+    /// hook), so the king diff-scans them and streams only the values that changed.</summary>
+    public static class PollKind
+    {
+        public const byte Age = 0;
+        public const byte Health = 1;
+        public const byte Nutrition = 2;
+        public const byte Happiness = 3;
+        public const byte Stamina = 4;
+        public const byte Mana = 5;
+        /// <summary>The raw age_overgrowth value. Preferred over Age: sending a derived age and
+        /// correcting by the difference drifted by a year whenever it landed on a year boundary.</summary>
+        public const byte Overgrowth = 6;
+    }
     public struct WorldLawMsg { public string Id; public bool Value; }
     public struct TimeMsg { public double WorldTime; }
     public struct RenameMsg { public long Id; public string Name; }
@@ -180,7 +197,7 @@ namespace WorldboxMP.Shared.Protocol
         {
             var w = new NetDataWriter();
             w.Put((ushort)list.Count);
-            foreach (var m in list) { w.Put(m.Id); w.Put(m.Json ?? ""); w.Put(m.StatsJson ?? ""); }
+            foreach (var m in list) { w.Put(m.Id); w.Put(m.Mode); w.Put(m.Json ?? ""); w.Put(m.StatsJson ?? ""); }
             return w.CopyData();
         }
         public static List<ActorStateMsg> ReadActorResync(byte[] data)
@@ -188,7 +205,7 @@ namespace WorldboxMP.Shared.Protocol
             var r = new NetDataReader(data);
             int n = r.GetUShort();
             var list = new List<ActorStateMsg>(n);
-            for (int i = 0; i < n; i++) list.Add(new ActorStateMsg { Id = r.GetLong(), Json = r.GetString(), StatsJson = r.GetString() });
+            for (int i = 0; i < n; i++) list.Add(new ActorStateMsg { Id = r.GetLong(), Mode = r.GetByte(), Json = r.GetString(), StatsJson = r.GetString() });
             return list;
         }
 

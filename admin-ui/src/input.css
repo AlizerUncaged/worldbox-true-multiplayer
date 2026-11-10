@@ -1,0 +1,92 @@
+@import "tailwindcss";
+@source "./";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@font-face {
+  font-family: "Jakarta";
+  src: url("/assets/font.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: "Jakarta", ui-sans-serif, system-ui, sans-serif;
+  --color-page: #eceef3;
+  --color-ink: #15171c;
+  --color-muted: #8b909a;
+  --color-line: #e7e9ee;
+  --color-brand: #3d7bfa;
+  --color-brand-soft: #e8f0ff;
+  --color-night: #111215;
+  --color-night-card: #1b1c20;
+  --color-night-line: #2a2b31;
+  --shadow-soft: 0 10px 30px -12px rgb(16 24 40 / 0.12), 0 2px 6px -2px rgb(16 24 40 / 0.05);
+  --shadow-pop: 0 24px 60px -20px rgb(16 24 40 / 0.35);
+}
+
+@utility card {
+  @apply rounded-3xl bg-white shadow-soft dark:bg-night-card dark:shadow-none dark:ring-1 dark:ring-night-line;
+}
+@utility field {
+  @apply w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-sm text-ink placeholder:text-muted/80
+      outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15
+      dark:border-night-line dark:bg-night dark:text-white;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold transition active:scale-[.98] disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-brand text-white hover:bg-brand/90;
+}
+@utility btn-ghost {
+  @apply btn text-ink hover:bg-black/5 dark:text-white dark:hover:bg-white/5;
+}
+@utility btn-soft {
+  @apply btn bg-brand-soft text-brand hover:bg-brand/15 dark:bg-brand/15;
+}
+@utility btn-danger {
+  @apply btn bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-400;
+}
+@utility pill {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+}
+@utility pill-violet {
+  @apply pill bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-300;
+}
+@utility pill-rose {
+  @apply pill bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300;
+}
+@utility pill-green {
+  @apply pill bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300;
+}
+@utility pill-blue {
+  @apply pill bg-brand-soft text-brand dark:bg-brand/15 dark:text-blue-300;
+}
+@utility pill-gray {
+  @apply pill bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-gray-300;
+}
+@utility count {
+  @apply ml-1.5 rounded-md bg-brand px-1.5 py-px text-[11px] font-bold text-white;
+}
+@utility nav-item {
+  @apply flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted transition hover:bg-black/5 hover:text-ink dark:hover:bg-white/5 dark:hover:text-white;
+  &.active { @apply bg-white text-ink shadow-soft dark:bg-night-card dark:text-white dark:shadow-none; }
+}
+@utility tab {
+  @apply relative pb-3 text-sm font-medium text-muted transition hover:text-ink dark:hover:text-white;
+  &.active { @apply text-ink dark:text-white; }
+  &.active::after { content: ""; @apply absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-ink dark:bg-white; }
+}
+@utility row {
+  @apply flex items-center gap-4 border-t border-line px-6 py-4 first:border-t-0 dark:border-night-line;
+}
+@utility avatar {
+  @apply grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white ring-2 ring-white dark:ring-night-card;
+}
+@utility label {
+  @apply mb-1.5 block text-xs font-semibold text-muted;
+}
+@utility chip {
+  @apply rounded-lg bg-gray-100 px-2 py-1 font-mono text-xs text-gray-600 dark:bg-white/10 dark:text-gray-300;
+}

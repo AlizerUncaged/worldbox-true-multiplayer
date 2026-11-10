@@ -1,0 +1,31 @@
+[Unit]
+Description=WorldBox Multiplayer server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wbmp
+Group=wbmp
+WorkingDirectory=/opt/worldbox-multiplayer
+ExecStart=/opt/worldbox-multiplayer/WorldboxMP.Server
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_NOLOGO=1
+# Plain journal output (no ANSI colors).
+Environment=NO_COLOR=1
+# Per-instance settings (port, db path, advertised versions) live here so a
+# redeploy never overwrites them. See .env.example in the repository.
+EnvironmentFile=-/etc/worldbox-multiplayer.env
+Restart=always
+RestartSec=3
+
+# Hardening: the server only needs its own data dir.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StateDirectory=worldbox-multiplayer
+ReadWritePaths=/var/lib/worldbox-multiplayer
+
+[Install]
+WantedBy=multi-user.target

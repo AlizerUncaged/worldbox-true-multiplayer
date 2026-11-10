@@ -16,8 +16,10 @@
          Flip to "release" (or clear) when we leave beta. -->
     <ReleaseChannel>beta</ReleaseChannel>
 
-    <!-- WorldBox install root: Projects/Worldbox-Multiplayer/src/Client -> up 4. -->
-    <GameDir>$(MSBuildProjectDirectory)\..\..\..\..</GameDir>
+    <!-- WorldBox install root. Set the WORLDBOX_DIR env var (or -p:GameDir=...) when the
+         repo lives elsewhere; otherwise Projects/Worldbox-Multiplayer/src/Client -> up 4. -->
+    <GameDir Condition="'$(GameDir)' == '' and '$(WORLDBOX_DIR)' != ''">$(WORLDBOX_DIR)</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">$(MSBuildProjectDirectory)\..\..\..\..</GameDir>
     <ManagedDir>$(GameDir)\worldbox_Data\Managed</ManagedDir>
     <ModsDir>$(GameDir)\worldbox_Data\StreamingAssets\mods</ModsDir>
     <!-- Live mod folder NML scans. Debug builds auto-deploy the whole output here. -->
@@ -85,6 +87,9 @@
     <Reference Include="UnityEngine.UnityWebRequestTextureModule">
       <HintPath>$(ManagedDir)\UnityEngine.UnityWebRequestTextureModule.dll</HintPath><Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.ScreenCaptureModule">
+      <HintPath>$(ManagedDir)\UnityEngine.ScreenCaptureModule.dll</HintPath><Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.PhysicsModule">
       <HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private>
     </Reference>
@@ -98,6 +103,8 @@
 
   <ItemGroup>
     <None Include="mod.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- NML mod-list icon (mod.json "iconPath"), drawn at 48x48 in the mods window. -->
+    <None Include="icon.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('icon.png')" />
   </ItemGroup>
 
   <!-- Icons baked into the dll so the mod is self-contained. Explicit LogicalName
@@ -136,10 +143,15 @@
     <ModVersion>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</ModVersion>
   </PropertyGroup>
 
-  <!-- Bake src/Client/.env into generated constants (BuildConfig.g.cs in obj/):
+  <!-- Bake src/Client/.env (or .env.example) into generated constants (BuildConfig.g.cs in obj/):
        the official server origin ships inside the DLL, never as a file. -->
   <Target Name="GenerateBuildConfig" BeforeTargets="CoreCompile">
-    <Exec Command="python &quot;$(MSBuildProjectDirectory)\bake_env.py&quot; &quot;$(MSBuildProjectDirectory)\.env&quot; &quot;$(IntermediateOutputPath)BuildConfig.g.cs&quot;" />
+    <PropertyGroup>
+      <!-- Local .env (git-ignored) wins; otherwise the committed .env.example. -->
+      <_BakeEnv Condition="Exists('$(MSBuildProjectDirectory)\.env')">$(MSBuildProjectDirectory)\.env</_BakeEnv>
+      <_BakeEnv Condition="'$(_BakeEnv)' == ''">$(MSBuildProjectDirectory)\.env.example</_BakeEnv>
+    </PropertyGroup>
+    <Exec Command="python &quot;$(MSBuildProjectDirectory)\bake_env.py&quot; &quot;$(_BakeEnv)&quot; &quot;$(IntermediateOutputPath)BuildConfig.g.cs&quot;" />
     <ItemGroup>
       <Compile Include="$(IntermediateOutputPath)BuildConfig.g.cs" />
     </ItemGroup>
@@ -151,6 +163,7 @@
     <ItemGroup>
       <_DeployFiles Include="$(OutDir)*.dll" />
       <_DeployFiles Include="$(OutDir)mod.json" Condition="Exists('$(OutDir)mod.json')" />
+      <_DeployFiles Include="$(OutDir)icon.png" Condition="Exists('$(OutDir)icon.png')" />
       <!-- 3D easter-egg models loaded at runtime from the mod folder. -->
       <_DeployGlb Include="$(MSBuildProjectDirectory)\Assets3D\*.glb" />
     </ItemGroup>
@@ -174,13 +187,19 @@
            bin\Publish\beta-2026.07.30.2043 - the same string players see in the HUD. -->
       <PublishModDir>$(MSBuildProjectDirectory)\bin\Publish\$(ReleaseChannel)-$(ModVersion)</PublishModDir>
     </PropertyGroup>
-    <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." />
-    <Exec Command="dotnet tool run obfuscar.console &quot;$(MSBuildProjectDirectory)\obfuscar.xml&quot;" WorkingDirectory="$(TargetDir)" />
+    <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." EnvironmentVariables="DOTNET_CLI_TELEMETRY_OPTOUT=1;DOTNET_NOLOGO=1" />
+    <PropertyGroup>
+      <_ObfGameDir>$([System.IO.Path]::GetFullPath('$(GameDir)'))</_ObfGameDir>
+      <_ObfXml>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\obfuscar.xml').Replace('{GAMEDIR}', '$(_ObfGameDir)'))</_ObfXml>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(TargetDir)obfuscar.generated.xml" Lines="$([MSBuild]::Escape('$(_ObfXml)'))" Overwrite="true" />
+    <Exec Command="dotnet tool run obfuscar.console &quot;$(TargetDir)obfuscar.generated.xml&quot;" WorkingDirectory="$(TargetDir)" EnvironmentVariables="DOTNET_CLI_TELEMETRY_OPTOUT=1;DOTNET_NOLOGO=1" />
     <ItemGroup>
       <_ShipDlls Include="$(TargetDir)obfuscated\WorldboxMP.Client.dll" />
       <_ShipDlls Include="$(TargetDir)WorldboxMP.Shared.dll" />
       <_ShipDlls Include="$(TargetDir)LiteNetLib.dll" />
       <_ShipFiles Include="$(OutDir)mod.json" Condition="Exists('$(OutDir)mod.json')" />
+      <_ShipFiles Include="$(OutDir)icon.png" Condition="Exists('$(OutDir)icon.png')" />
       <_ShipGlb Include="$(MSBuildProjectDirectory)\Assets3D\*.glb" />
     </ItemGroup>
     <MakeDir Directories="$(PublishModDir)" />

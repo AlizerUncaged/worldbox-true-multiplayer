@@ -139,6 +139,9 @@ namespace WorldboxMP.Client.Mirror
                 PatchCreate(harmony, typeof(ReligionManager), "newReligion", typeof(Religion));
                 PatchCreate(harmony, typeof(CultureManager), "newCulture", typeof(Culture));
                 PatchCreate(harmony, typeof(LanguageManager), "newLanguage", typeof(Language));
+                PatchCreate(harmony, typeof(ClanManager), "newClan", typeof(Clan));
+                PatchCreate(harmony, typeof(FamilyManager), "newFamily", typeof(Family));
+                PatchCreate(harmony, typeof(ArmyManager), "newArmy", typeof(Army));
                 // Buildings: hook the FUNNEL overload addBuilding(BuildingAsset, WorldTile, …)
                 // - addBuilding(string,…) calls it, and civs/placement may call it directly,
                 // so this catches every addBuilding-based creation (e.g. village huts). NOTE:
@@ -161,6 +164,9 @@ namespace WorldboxMP.Client.Mirror
                 PatchRemove(harmony, typeof(ReligionManager), typeof(Religion));
                 PatchRemove(harmony, typeof(CultureManager), typeof(Culture));
                 PatchRemove(harmony, typeof(LanguageManager), typeof(Language));
+                PatchRemove(harmony, typeof(ClanManager), typeof(Clan));
+                PatchRemove(harmony, typeof(FamilyManager), typeof(Family));
+                PatchRemove(harmony, typeof(ArmyManager), typeof(Army));
                 PatchRemove(harmony, typeof(BuildingManager), typeof(Building));
                 // Bombs/disasters/fire destroy buildings via Building.startDestroyBuilding(), NOT
                 // BuildingManager.removeObject - so those destructions never reached followers
@@ -175,6 +181,20 @@ namespace WorldboxMP.Client.Mirror
                 PatchMember(harmony, "setCulture", typeof(Culture));
                 PatchMember(harmony, "joinLanguage", typeof(Language));
                 PatchMember(harmony, "joinCity", typeof(City));
+
+                // Structural change events (were a 500 ms full re-send of every city/kingdom):
+                // territory, and the culture/language/religion an owner follows.
+                PatchDirty(harmony, typeof(City), "addZone", typeof(TileZone));
+                PatchDirty(harmony, typeof(City), "removeZone", typeof(TileZone));
+                PatchDirty(harmony, typeof(City), "setCulture", typeof(Culture));
+                PatchDirty(harmony, typeof(City), "setLanguage", typeof(Language));
+                PatchDirty(harmony, typeof(City), "setReligion", typeof(Religion));
+                PatchDirty(harmony, typeof(Kingdom), "setCulture", typeof(Culture));
+                PatchDirty(harmony, typeof(Kingdom), "setLanguage", typeof(Language));
+                PatchDirty(harmony, typeof(Kingdom), "setReligion", typeof(Religion));
+                PatchMember(harmony, "setClan", typeof(Clan));
+                PatchMember(harmony, "setFamily", typeof(Family));
+                PatchMember(harmony, "setArmy", typeof(Army));
 
                 // City ownership change (capture / rebellion).
                 var capture = AccessTools.Method(typeof(City), "joinAnotherKingdom", new[] { typeof(Kingdom), typeof(bool), typeof(bool) });
@@ -365,11 +385,10 @@ namespace WorldboxMP.Client.Mirror
         {
             try
             {
-                MethodInfo found = null;
-                foreach (var mi in managerType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
-                    if (mi.Name == method && objType.IsAssignableFrom(mi.ReturnType)) { found = mi; break; }
-                if (found != null) harmony.Patch(found, postfix: H(nameof(StructuralCreate_Postfix)));
-                else ModLog.Warn($"PatchCreate: no {managerType.Name}.{method} returning {objType.Name}");
+                int n = 0;
+                foreach (var mi in managerType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                    if (mi.Name == method && objType.IsAssignableFrom(mi.ReturnType)) { harmony.Patch(mi, postfix: H(nameof(StructuralCreate_Postfix))); n++; }
+                if (n == 0) ModLog.Warn($"PatchCreate: no {managerType.Name}.{method} returning {objType.Name}");
             }
             catch (Exception e) { ModLog.Warn($"PatchCreate {managerType.Name}.{method} failed: " + e.Message); }
         }
@@ -383,6 +402,19 @@ namespace WorldboxMP.Client.Mirror
             }
             catch (Exception e) { ModLog.Warn($"PatchRemove {managerType.Name} failed: " + e.Message); }
         }
+
+        private static void PatchDirty(Harmony harmony, Type type, string method, params Type[] args)
+        {
+            try
+            {
+                var mi = AccessTools.Method(type, method, args);
+                if (mi != null) harmony.Patch(mi, postfix: H(nameof(Dirty_Postfix)));
+                else ModLog.Warn($"hook MISS: {type.Name}.{method}");
+            }
+            catch (Exception e) { ModLog.Warn($"PatchDirty {type.Name}.{method} failed: " + e.Message); }
+        }
+
+        private static void Dirty_Postfix(object __instance) => MirrorManager.Instance?.MarkDirty(__instance);
 
         private static void PatchMember(Harmony harmony, string method, Type targetType)
         {
@@ -476,6 +508,7 @@ namespace WorldboxMP.Client.Mirror
         private static void SetName_Postfix(NanoObject __instance, string pName)
         {
             if (__instance is Actor a) MirrorManager.Instance?.OnKingRename(a, pName);
+            else MirrorManager.Instance?.MarkDirty(__instance);   // city/kingdom/culture/clan... renamed
         }
 
         private static void GetHit_Postfix(Actor __instance)

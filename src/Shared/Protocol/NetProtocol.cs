@@ -13,8 +13,11 @@ namespace WorldboxMP.Shared.Protocol
     public static class NetProtocol
     {
         /// <summary>Connection key LiteNetLib uses to accept peers. Bump on breaking protocol changes.
-        /// v2: mirror epoch, chunked snapshots on their own channel, follower resync requests.</summary>
-        public const string ConnectKey = "WBMP/2";
+        /// v2: mirror epoch, chunked snapshots on their own channel, follower resync requests.
+        /// v3: multiple server lobbies, room caps, session tokens, RoomLeft.
+        /// v4: event-based sync (actor record patches, vitals/overgrowth streams, snapshot
+        ///     cut-over marker, actor roster), clans/families/armies mirrored.</summary>
+        public const string ConnectKey = "WBMP/4";
 
         /// <summary>Default server port (overridable).</summary>
         public const int DefaultPort = 40441;
@@ -31,8 +34,14 @@ namespace WorldboxMP.Shared.Protocol
         /// interleaves between chunks; big enough to keep per-chunk overhead trivial.</summary>
         public const int SnapshotChunkSize = 48 * 1024;
 
-        /// <summary>The fixed shareable id of the always-present first room.</summary>
+        /// <summary>The fixed shareable id of the always-present first lobby. Further
+        /// server lobbies get 0001, 0002, ... (player rooms never use digits-only ids).</summary>
         public const string Room0Id = "0000";
+
+        /// <summary>Disconnect reason sent when the same account logs in somewhere else.
+        /// The client must NOT auto-login again on this one (two games would kick each
+        /// other forever).</summary>
+        public const string SignedInElsewhere = "Signed in from another game - this one was disconnected.";
 
         /// <summary>Max room password length.</summary>
         public const int MaxPasswordLength = 16;

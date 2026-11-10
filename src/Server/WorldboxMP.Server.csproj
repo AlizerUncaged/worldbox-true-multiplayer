@@ -1,24 +1,27 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <AssemblyName>WorldboxMP.Server</AssemblyName>
     <ApplicationIcon>icon.ico</ApplicationIcon>
     <Product>WorldBox Multiplayer Server</Product>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <!-- WorldBox root: Projects/Worldbox-Multiplayer/src/Server -> up 4. Debug builds
-         auto-deploy the full framework-dependent output here for the user to run. -->
-    <ServerDeployDir>$(MSBuildProjectDirectory)\..\..\..\..\Server</ServerDeployDir>
+    <!-- WorldBox root (WORLDBOX_DIR env, else Projects/Worldbox-Multiplayer/src/Server -> up 4).
+         Debug builds auto-deploy the framework-dependent output to <WorldBox>/Server, but
+         only when that root really is a WorldBox install. -->
+    <WbGameDir Condition="'$(WORLDBOX_DIR)' != ''">$(WORLDBOX_DIR)</WbGameDir>
+    <WbGameDir Condition="'$(WbGameDir)' == ''">$(MSBuildProjectDirectory)\..\..\..\..</WbGameDir>
+    <ServerDeployDir>$(WbGameDir)\Server</ServerDeployDir>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="LiteNetLib" Version="1.3.1" />
-    <PackageReference Include="MongoDB.Driver" Version="3.9.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
-    <PackageReference Include="Pastel" Version="7.0.1" />
+    <PackageReference Include="MongoDB.Driver" Version="3.13.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <PackageReference Include="Pastel" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,24 +35,26 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Admin website, served from memory (no files to deploy). Built by admin-ui/build.sh. -->
+    <EmbeddedResource Include="Admin\wwwroot\*.*" LogicalName="admin/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Credentials/config next to the exe (read at startup; env vars override). -->
     <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Debug auto-deploy: copy the whole framework-dependent output (exe + all deps +
        deps.json + runtimeconfig.json) into worldbox/Server so it's ready to run. -->
-  <Target Name="DeployServer" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+  <Target Name="DeployServer" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug' and Exists('$(WbGameDir)\worldbox.exe')">
     <ItemGroup>
       <_ServerOut Include="$(OutDir)**\*.*" />
     </ItemGroup>
     <MakeDir Directories="$(ServerDeployDir)" />
     <!-- ContinueOnError: if the server is currently running it locks these DLLs; don't
          fail the build - just warn so the user knows to stop it to pick up the new build. -->
-    <Copy SourceFiles="@(_ServerOut)"
-          DestinationFiles="@(_ServerOut->'$(ServerDeployDir)\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true"
-          ContinueOnError="WarnAndContinue" />
-    <Message Importance="high" Text="[WBMP] Deployed server -> $(ServerDeployDir) (if you saw copy warnings above, stop the running server and rebuild)." />
+    <Copy SourceFiles="@(_ServerOut)" DestinationFiles="@(_ServerOut->'$(ServerDeployDir)\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" ContinueOnError="WarnAndContinue" />
+    <Message Importance="high" Text="[WBMP] Deployed server -&gt; $(ServerDeployDir) (if you saw copy warnings above, stop the running server and rebuild)." />
   </Target>
 
 </Project>

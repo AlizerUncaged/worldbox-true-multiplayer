@@ -13,6 +13,9 @@ namespace WorldboxMP.Server.Net
         public string Username { get; set; } = "";
         public bool IsAuthenticated => Id4.Length > 0;
 
+        /// <summary>An account operation is running on the auth worker (ignore repeats).</summary>
+        public bool AuthPending { get; set; }
+
         /// <summary>The room this session is currently in, if any.</summary>
         public Room CurrentRoom { get; set; }
 
@@ -20,6 +23,15 @@ namespace WorldboxMP.Server.Net
         /// snapshot is expensive for the king, so at most one request per cooldown).</summary>
         public System.DateTime LastResyncRequestUtc { get; set; } = System.DateTime.MinValue;
 
-        public Session(NetPeer peer) => Peer = peer;
+        /// <summary>Remote address (operator console / admin panel only, never sent to players).</summary>
+        public string Ip { get; }
+
+        public System.DateTime ConnectedAtUtc { get; } = System.DateTime.UtcNow;
+
+        public Session(NetPeer peer)
+        {
+            Peer = peer;
+            Ip = peer.Address.ToString();
+        }
     }
 }

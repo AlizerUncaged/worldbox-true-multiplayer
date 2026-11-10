@@ -1,0 +1,12 @@
+{
+  "name": "wbmp-admin-ui",
+  "private": true,
+  "scripts": {
+    "build": "sh build.sh"
+  },
+  "devDependencies": {
+    "@fontsource-variable/plus-jakarta-sans": "^5.2.5",
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

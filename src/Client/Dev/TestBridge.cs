@@ -13,7 +13,7 @@ using WorldboxMP.Client.Mirror;
 namespace WorldboxMP.Client.Dev
 {
     /// <summary>
-    /// File-driven remote control so the dev (Claude) can drive automated sync tests without
+    /// File-driven remote control so a developer can drive automated sync tests without
     /// manually clicking the game. Both instances poll a SHARED command file every second;
     /// each line is "&lt;id&gt;|&lt;role&gt;|&lt;cmd&gt;|&lt;args...&gt;" (role = king|follower|all). New ids
     /// (by full-line content) run once per instance. State is written to a per-role file the dev

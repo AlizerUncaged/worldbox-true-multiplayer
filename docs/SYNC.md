@@ -9,6 +9,54 @@ render keep running so creatures look right and move smoothly. The king broadcas
 events; followers apply them. A one-time **world snapshot on join** transfers the
 existing world; everything after is **granular events** (no periodic reload).
 
+## Transport (protocol WBMP/4): events first, change detection where polling fits
+
+Nothing is sent unless something changed. Three layers:
+
+1. **Events (hooks).** Every discrete change has a Harmony hook: spawns, deaths, moves,
+   combat, terrain, fire, structural create/remove (cities, kingdoms, wars, cultures,
+   religions, languages, clans, families, armies, buildings...), memberships, captures.
+   Structural objects that change in place (city territory via `addZone`/`removeZone`,
+   culture/language/religion setters on cities and kingdoms, renames) are marked dirty and
+   sent once per frame.
+2. **Change detection** for state the game mutates in place with no method to hook. The
+   owner scans and sends only what differs from what it last sent:
+   - actor vitals (health, nutrition, happiness, stamina, mana) as compact scalars, 1 s;
+   - `age_overgrowth` only when it changes (age itself is derived from the synced clock);
+   - actor records as **field patches** (only changed fields; full record when a field
+     resets to default), rotating through the population;
+   - cities/kingdoms (2 s) and other meta objects (5 s), sent only if their data changed;
+   - animation/task state (100 ms diff scan, set from too many code paths to hook).
+3. **Safety net.** Every 30 s the change baselines are reset (objects, vitals, overgrowth)
+   and the owner sends an **actor roster**; followers drop stray actors and request missing
+   ones. Actor full records refresh on a rolling basis (`max(30 s, population / 10)` per
+   actor), so a big world never sends everything in one burst.
+
+Ordering guarantees:
+- **Snapshot cut-over.** When the owner serializes a snapshot it sends a `SnapshotMark` on
+  the reliable stream. The receiver buffers every later live change and replays it once the
+  snapshot has finished loading (the load runs over several frames on `SmoothLoader`), so
+  nothing created during a join or resync is lost or applied to the old world. Taking a
+  snapshot also resets every change baseline, so the next sends are complete.
+- **Spawns are sent one frame late**, with settled data (births get subspecies, city and
+  traits right after creation). A spawn for an actor the follower already has is ignored.
+- **Memberships that arrive before their target** (culture, clan...) are retried for 30 s,
+  and followers re-link every actor's culture/religion/language/clan/family/army from its
+  own data once a second.
+
+Pitfalls found the hard way (keep these in mind when touching the apply side):
+- LiteNetLib's packet processor reuses one `MirrorMessage` instance: copy before buffering.
+- The game's JSON settings use `DefaultValueHandling.IgnoreAndPopulate`; merging a patch with
+  them resets every field not in the patch to its `[DefaultValue]`. Patches use their own
+  settings (`Include` + `ObjectCreationHandling.Replace`, or lists get appended to).
+- Structural kind numbers share the `ObjectRemove` namespace with `ActorRemoveKind = 10`;
+  the registry refuses colliding kinds.
+
+Measured on the two-instance harness (x5 speed, owner traffic over 60 s): a ~150-actor,
+4-city world went from 93 KB/s to 31-33 KB/s; a ~400-actor, 7-city world runs at 76 KB/s.
+Deep comparisons (every actor's vitals, age, city, culture, clan, kingdom, traits and every
+meta system) came back identical.
+
 ## Granular events mirrored (king → followers)
 | Category | Hook | Apply |
 |---|---|---|

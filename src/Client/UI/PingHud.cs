@@ -154,7 +154,7 @@ namespace WorldboxMP.Client.UI
             if (Input.GetKeyDown(KeyCode.F3)) _visible = !_visible;   // toggle the net HUD
 
             if (_pauseLabel != null)
-                _pauseLabel.text = Mirror.MirrorManager.KingPaused ? "⏸  The God King has paused the game" : "";
+                _pauseLabel.text = Mirror.MirrorManager.KingPaused ? "⏸  The Owner has paused the game" : "";
 
             if (_barRoot != null)
             {

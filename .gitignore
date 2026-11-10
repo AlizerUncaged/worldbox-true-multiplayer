@@ -13,12 +13,34 @@ obj/
 *.nupkg
 packages/
 
-# Local secrets / config overrides
+# Local secrets / config overrides. Only *.env.example templates are committed.
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
 appsettings.Local.json
 *.local.json
-# NOTE: src/Client/.env is COMMITTED on purpose - it is the build-time baked
-# client config (official server origin), not a runtime file and not a secret.
+*.pfx
+*.p12
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+*.s3db
+
+# Dev tooling
+admin-ui/node_modules/
 
 # OS
 Thumbs.db
 .DS_Store
+
+# local build / scratch output
+out/
+art/

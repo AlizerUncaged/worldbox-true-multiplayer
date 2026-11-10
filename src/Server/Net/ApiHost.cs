@@ -34,7 +34,7 @@ namespace WorldboxMP.Server.Net
                 k.ListenAnyIP(port, o =>
                 {
                     if (!string.IsNullOrEmpty(pfx))
-                        o.UseHttps(new X509Certificate2(pfx, pass));
+                        o.UseHttps(X509CertificateLoader.LoadPkcs12FromFile(pfx, pass));
                 });
             });
 

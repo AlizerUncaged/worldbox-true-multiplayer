@@ -26,11 +26,13 @@
   <Var name="ReuseNames" value="true" />
   <Var name="SuppressIldasm" value="true" />
 
-  <!-- Resolve references: game + modloader + harmony assemblies. -->
-  <AssemblySearchPath path="..\..\..\..\..\..\worldbox_Data\Managed" />
-  <AssemblySearchPath path="..\..\..\..\..\..\worldbox_Data\StreamingAssets\mods" />
-  <AssemblySearchPath path="..\..\..\..\..\..\worldbox_Data\StreamingAssets\mods\NML" />
-  <AssemblySearchPath path="..\..\..\..\..\..\worldbox_Data\StreamingAssets\mods\NML\Assemblies" />
+  <!-- Resolve references: game + modloader + harmony assemblies. {GAMEDIR} is filled in
+       by the csproj (same GameDir / WORLDBOX_DIR the compile uses), so the repo can live
+       anywhere, not only inside the game folder. -->
+  <AssemblySearchPath path="{GAMEDIR}\worldbox_Data\Managed" />
+  <AssemblySearchPath path="{GAMEDIR}\worldbox_Data\StreamingAssets\mods" />
+  <AssemblySearchPath path="{GAMEDIR}\worldbox_Data\StreamingAssets\mods\NML" />
+  <AssemblySearchPath path="{GAMEDIR}\worldbox_Data\StreamingAssets\mods\NML\Assemblies" />
 
   <Module file="$(InPath)\WorldboxMP.Client.dll">
     <!-- The license/AI notice must stay readable VERBATIM in any decompiler output

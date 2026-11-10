@@ -49,6 +49,7 @@ namespace WorldboxMP.Client
 
             if (Input.GetKeyDown(KeyCode.F9))
                 MultiplayerWindow.Toggle();
+            MultiplayerWindow.Tick();
 
 #if DEBUG
             // Camera/zoom diagnostics: log the exact zoom+LOD state whenever the wheel

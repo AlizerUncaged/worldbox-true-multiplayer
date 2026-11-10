@@ -37,6 +37,7 @@ namespace WorldboxMP.Client.Dev
             ModLog.Info($"[dev] .dev detected - auto-login as {User} (instance #{n}).");
 
             var net = NetClient.Instance;
+            net.DisableTokenLogin = true;   // instances share PlayerPrefs; each must stay its own testpN
             net.OnStateChanged += s =>
             {
                 if (s == ConnState.Disconnected) _loginTried = false;   // re-login on the next (re)connect

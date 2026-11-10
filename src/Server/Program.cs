@@ -1,8 +1,10 @@
 using System;
 using System.Threading;
 using Pastel;
+using WorldboxMP.Server.Admin;
 using WorldboxMP.Server.Data;
 using WorldboxMP.Server.Net;
+using WorldboxMP.Server.Rooms;
 using WorldboxMP.Shared.Protocol;
 
 namespace WorldboxMP.Server
@@ -11,6 +13,7 @@ namespace WorldboxMP.Server
     {
         // Config precedence: env vars > appsettings.json > built-in defaults.
         //   WBMP_CONNECTION_STRING / WBMP_DATABASE_BRAND / WBMP_PORT / WBMP_LATEST_VERSION
+        //   WBMP_LOBBIES ("Lobby;Sandbox;Chaos") / WBMP_MAX_PLAYERS / WBMP_MAX_ROOMS
         //   (legacy WBMP_MONGO still accepted and implies DatabaseBrand=mongodb)
         // Default brand is sqlite so a fresh checkout runs with ZERO external services:
         // one db file appears next to the exe. The official instance flips to mongodb
@@ -25,6 +28,55 @@ namespace WorldboxMP.Server
             public string LatestVersion { get; set; }
             public string MinimumVersion { get; set; }
             public string Mongo { get; set; }   // legacy field (pre-brand); implies mongodb
+            public System.Collections.Generic.List<string> Lobbies { get; set; }
+            public int? MaxPlayersPerRoom { get; set; }
+            public int? MaxRooms { get; set; }
+        }
+
+        /// <summary>
+        /// Load KEY=VALUE lines from a .env file next to the exe (or in the working
+        /// directory) into the process environment. Real environment variables win, so
+        /// systemd's EnvironmentFile and the shell always override the file.
+        /// </summary>
+        private static void LoadDotEnv()
+        {
+            foreach (var dir in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+            {
+                string path = System.IO.Path.Combine(dir, ".env");
+                if (!System.IO.File.Exists(path)) continue;
+                foreach (var raw in System.IO.File.ReadAllLines(path))
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0 || line[0] == '#') continue;
+                    if (line.StartsWith("export ")) line = line.Substring(7).TrimStart();
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string key = line.Substring(0, eq).Trim();
+                    string val = line.Substring(eq + 1).Trim();
+                    if (val.Length >= 2 && (val[0] == '"' || val[0] == '\'') && val[val.Length - 1] == val[0])
+                        val = val.Substring(1, val.Length - 2);
+                    if (Environment.GetEnvironmentVariable(key) == null)
+                        Environment.SetEnvironmentVariable(key, val);
+                }
+                Console.WriteLine("Loaded settings from " + path);
+                return;
+            }
+        }
+
+        private static RoomSettings LoadRoomSettings(AppSettings settings)
+        {
+            var rs = new RoomSettings();
+            string lobbiesEnv = Environment.GetEnvironmentVariable("WBMP_LOBBIES");
+            if (!string.IsNullOrWhiteSpace(lobbiesEnv))
+                rs.Lobbies = new System.Collections.Generic.List<string>(
+                    lobbiesEnv.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            else if (settings.Lobbies != null && settings.Lobbies.Count > 0)
+                rs.Lobbies = settings.Lobbies;
+            rs.MaxPlayersPerRoom = int.TryParse(Environment.GetEnvironmentVariable("WBMP_MAX_PLAYERS"), out var mp) ? mp
+                                   : settings.MaxPlayersPerRoom ?? rs.MaxPlayersPerRoom;
+            rs.MaxRooms = int.TryParse(Environment.GetEnvironmentVariable("WBMP_MAX_ROOMS"), out var mr) ? mr
+                          : settings.MaxRooms ?? rs.MaxRooms;
+            return rs;
         }
 
         private static AppSettings LoadAppSettings()
@@ -69,6 +121,7 @@ namespace WorldboxMP.Server
 
         private static void Run()
         {
+            LoadDotEnv();
             var settings = LoadAppSettings();
 
             // Legacy fallbacks first so new-style values always win.
@@ -136,8 +189,18 @@ namespace WorldboxMP.Server
                 return;
             }
 
-            var server = new GameServer(db, port);
+            var admin = AdminOptions.FromEnv();
+            bool adminReady = admin.Enabled && AdminHost.Seed(db, admin);   // before the auth worker owns the db
+
+            var server = new GameServer(db, port, LoadRoomSettings(settings));
             server.Start();
+
+            if (adminReady)
+            {
+                try { AdminHost.Start(server, admin); }
+                catch (Exception e) { Console.WriteLine("WARN: admin panel failed to start (" + e.Message + ")."); }
+            }
+            else if (!admin.Enabled) Console.WriteLine("Admin panel off (WBMP_ADMIN_ENABLED=true turns it on).");
 
             // REST api on the same port number, TCP side (version checks, health).
             try { ApiHost.Start(port); }

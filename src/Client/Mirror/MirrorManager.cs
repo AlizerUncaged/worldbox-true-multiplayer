@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
@@ -124,7 +125,11 @@ namespace WorldboxMP.Client.Mirror
         private static MethodInfo _setProfession;      // Actor.setProfession(UnitProfession, bool) (internal)
 
         // Registry of structural objects synced generically (Data + manager.loadObject).
-        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; public MethodInfo ReloadInstance; public MethodInfo IdGetter; }
+        private class ObjReg { public byte Kind; public Type ObjType; public Type DataType; public Func<object> Mgr; public FieldInfo DataField; public MethodInfo PrepareForSave; public MethodInfo GetData; public MethodInfo Save; public MethodInfo ReloadInstance; public MethodInfo LoadData; public MethodInfo IdGetter; }
+
+        /// <summary>Per-kind structural counters (sent on the king / applied + failed on followers).
+        /// Read by the dev bridge to prove every meta system actually crosses the wire.</summary>
+        public static readonly int[] ObjSentByKind = new int[32], ObjAppliedByKind = new int[32], ObjFailedByKind = new int[32];
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
         private bool _applyingStatus, _applyingEquip, _applyingObject, _applyingMember, _applyingCapture, _applyingKProp;
 
@@ -274,6 +279,9 @@ namespace WorldboxMP.Client.Mirror
             _appliedEpoch = 0;                 // follower: no synced world until a snapshot lands
             _outgoingSnapshots.Clear();
             _rxTransferId = -1; _rxSnapshot = null;
+            _awaitTransferId = -1; _postSnapshotBuffer.Clear();
+            _sentObjHash.Clear(); _sentOvergrowth.Clear(); _sentStatsHash.Clear(); _sentActorJson.Clear(); _lastFullAt.Clear(); _sentVitals.Clear(); _dirtyObjects.Clear(); _freshActors.Clear(); _pendingSpawns.Clear(); _lastWorldAgeHash = 0;
+            _snapshotLoading = false; _loadingTransferId = -1;
             _worldChangePending = false;
             RemoteMagnet.Clear();
             UI.PingHud.ClearTransfer();
@@ -355,9 +363,31 @@ namespace WorldboxMP.Client.Mirror
             Send(MirrorKind.MagnetDrag, MirrorCodec.Write(new GodPowerMsg { PowerId = "magnet", X = tile.pos.x, Y = tile.pos.y }));
         }
 
+        // Spawns are sent one frame late: the creation hooks fire before the game finishes
+        // setting the actor up (births get their subspecies/city/traits right after), and a
+        // record sent that early could not even be loaded on followers (sub=-1, no asset).
+        private readonly List<Actor> _pendingSpawns = new List<Actor>();
+        private int _pendingSpawnFrame;
+
         public void OnKingSpawned(Actor actor, string assetId)
         {
             if (!Active || !IsKing || ApplyingSpawn || actor == null) return;
+            _pendingSpawns.Add(actor);
+            _pendingSpawnFrame = UnityEngine.Time.frameCount;
+        }
+
+        private void FlushPendingSpawns()
+        {
+            if (_pendingSpawns.Count == 0 || UnityEngine.Time.frameCount == _pendingSpawnFrame) return;
+            var batch = _pendingSpawns.ToArray();
+            _pendingSpawns.Clear();
+            foreach (var a in batch)
+                if (a != null && a.isAlive()) BroadcastSpawn(a);   // died in its first frame: nothing to send
+        }
+
+        /// <summary>Send one actor's full creation record (also used to answer ActorRequest).</summary>
+        private void BroadcastSpawn(Actor actor)
+        {
             try
             {
                 // The live actor.data has save-derived fields (asset_id, coordinates,
@@ -392,6 +422,8 @@ namespace WorldboxMP.Client.Mirror
 
                 string actorJson = JsonConvert.SerializeObject(data, JsonHelper.read_settings);
                 Send(MirrorKind.SpawnUnit, MirrorCodec.Write(new SpawnMsg { SubId = subId, SubspeciesJson = subJson, ActorJson = actorJson, SubSapient = subSapient }));
+                _freshActors.Add(actor); _freshFrame = UnityEngine.Time.frameCount;
+                if (_sentActorJson.ContainsKey(actor.id)) { _sentActorJson.Remove(actor.id); _lastFullAt.Remove(actor.id); }
                 ModLog.Info($"[KING] broadcast spawn id={actor.id} sub={subId} actor={actorJson.Length}B sub={subJson.Length}B");
             }
             catch (Exception e) { ModLog.Error("OnKingSpawned failed: " + e); }
@@ -544,7 +576,10 @@ namespace WorldboxMP.Client.Mirror
 
         private static void BuildObjectRegistry()
         {
-            void Reg(byte kind, Type obj, Type data, Func<object> mgr) =>
+            void Reg(byte kind, Type obj, Type data, Func<object> mgr)
+            {
+                if (kind == ActorRemoveKind || _objReg.Exists(x => x.Kind == kind))
+                    throw new InvalidOperationException($"structural kind {kind} for {obj.Name} collides with another kind");
                 _objReg.Add(new ObjReg { Kind = kind, ObjType = obj, DataType = data, Mgr = mgr,
                     DataField = AccessTools.Field(obj, "data"),
                     // The game populates save-derived fields (e.g. BuildingData.asset_id) only
@@ -558,7 +593,11 @@ namespace WorldboxMP.Client.Mirror
                     Save = AccessTools.Method(obj, "save"),
                     // id is a PROPERTY on BaseSystemData (public long id { get; set; }), NOT a
                     // field - AccessTools.Field would return null. Use the property getter.
+                    // In-place update for an object the follower already has (MetaObject.loadData:
+                    // re-reads name/colors/stats and, for trait holders, the trait list).
+                    LoadData = AccessTools.Method(obj, "loadData", new[] { data }),
                     IdGetter = AccessTools.PropertyGetter(data, "id") });
+            }
             Reg(1, typeof(Kingdom), typeof(KingdomData), () => World.world.kingdoms);
             // Kingdoms have no loadKingdom(data); adopt fresh data via the base
             // CoreSystemObject.setData (plain swap) so 500ms re-sends keep kingID/capital/
@@ -578,6 +617,17 @@ namespace WorldboxMP.Client.Mirror
             Reg(7, typeof(Culture), typeof(CultureData), () => World.world.cultures);
             Reg(8, typeof(Language), typeof(LanguageData), () => World.world.languages);
             Reg(9, typeof(Building), typeof(BuildingData), () => World.world.buildings);
+            // Clans, families and armies were never mirrored: followers showed no clan/family/
+            // army anywhere and actors' links to them stayed empty. Kinds start at 20: 10 is
+            // ActorRemoveKind on the ObjectRemove channel (a clan at 10 deleted actors!).
+            void RegByName(byte kind, Type obj, string dataName, Func<object> mgr)
+            {
+                var dt = AccessTools.TypeByName(dataName);
+                if (dt != null) Reg(kind, obj, dt, mgr); else ModLog.Warn("[sync] no data type " + dataName);
+            }
+            RegByName(20, typeof(Clan), "ClanData", () => World.world.clans);
+            RegByName(21, typeof(Family), "FamilyData", () => World.world.families);
+            RegByName(22, typeof(Army), "ArmyData", () => World.world.armies);
         }
 
         public void OnKingHealth(Actor a)
@@ -614,7 +664,34 @@ namespace WorldboxMP.Client.Mirror
         // God powers that only open a UI window (selection/inspection) - never mirror these.
         private static readonly System.Collections.Generic.HashSet<string> _inspectionPowers =
             new System.Collections.Generic.HashSet<string> { "city_select", "inspect" };
-        public void OnKingObject(object obj)
+        // Last-sent fingerprint per structural object (kind, id). Change-only sends compare
+        // against it; it is wiped every FullRefreshSeconds so a missed apply still heals.
+        private readonly Dictionary<long, int> _sentObjHash = new Dictionary<long, int>();
+        private static long ObjKey(byte kind, long id) => ((long)kind << 56) ^ id;
+
+        // Objects touched by a hooked event this frame (zones, culture/language/religion
+        // setters, renames). Flushed once per frame, so a city that gains ten zones in one
+        // frame goes out once.
+        private readonly HashSet<object> _dirtyObjects = new HashSet<object>();
+
+        /// <summary>Event hook entry: this structural object changed; send it this frame.</summary>
+        public void MarkDirty(object obj)
+        {
+            if (!Active || !IsKing || _applyingObject || obj == null) return;
+            _dirtyObjects.Add(obj);
+        }
+
+        private void FlushDirtyObjects()
+        {
+            if (_dirtyObjects.Count == 0) return;
+            var batch = new List<object>(_dirtyObjects);
+            _dirtyObjects.Clear();
+            foreach (var o in batch) OnKingObject(o, onlyIfChanged: true);
+        }
+
+        public void OnKingObject(object obj) => OnKingObject(obj, onlyIfChanged: false);
+
+        public void OnKingObject(object obj, bool onlyIfChanged)
         {
             if (_objDbg < 16)
             {
@@ -650,8 +727,13 @@ namespace WorldboxMP.Client.Mirror
                             bool jsonHasName = json.Contains("\"name\"");
                             ModLog.Info($"[KING] OnKingObject SEND kind={r.Kind} name='{nm}' leaderID={lid} dataZones={zc} jsonLen={json.Length} jsonHasName={jsonHasName}");
                         }
+                        long okey = ObjKey(r.Kind, IdOf(obj));
+                        int ohash = json.GetHashCode();
+                        if (onlyIfChanged && _sentObjHash.TryGetValue(okey, out var prevHash) && prevHash == ohash) return;
+                        _sentObjHash[okey] = ohash;
                         Send(MirrorKind.Object, MirrorCodec.Write(new ObjectMsg { Kind = r.Kind, Json = json }));
                         DbgObjSent++;
+                        if (r.Kind < ObjSentByKind.Length) ObjSentByKind[r.Kind]++;
                         return;
                     }
                 if (!matched && _objDbg < 16) ModLog.Warn($"[KING] OnKingObject: NO registry match for {obj.GetType().Name}");
@@ -677,7 +759,10 @@ namespace WorldboxMP.Client.Mirror
                       : target is Religion ? MemberKind.Religion
                       : target is Culture ? MemberKind.Culture
                       : target is Language ? MemberKind.Language
-                      : target is City ? MemberKind.City : (byte)0;
+                      : target is City ? MemberKind.City
+                      : target is Clan ? MemberKind.Clan
+                      : target is Family ? MemberKind.Family
+                      : target is Army ? MemberKind.Army : (byte)0;
             if (kind == 0) return;
             Send(MirrorKind.Member, MirrorCodec.Write(new MemberMsg { ActorId = a.id, Kind = kind, TargetId = IdOf(target) }));
         }
@@ -724,8 +809,86 @@ namespace WorldboxMP.Client.Mirror
 
         // ── Incoming ────────────────────────────────────────────────────────
         private int _rxLog;
+        // ── Snapshot cut-over (follower) ────────────────────────────────────
+        // Set by a SnapshotMark meant for us: the live messages that follow it describe changes
+        // made after that snapshot was taken, so hold them until the snapshot has loaded.
+        private int _awaitTransferId = -1;
+        private readonly List<MirrorMessage> _postSnapshotBuffer = new List<MirrorMessage>();
+        private const int MaxPostSnapshotBuffer = 50000;
+        private bool _replaying;
+        // SaveManager.loadData runs on the game's SmoothLoader over many frames. Until that
+        // queue drains the world is half-built, so live messages wait (and the epoch only
+        // flips to the new world once it is really there).
+        private bool _snapshotLoading;
+        private byte _loadingEpoch;
+        private int _loadingTransferId = -1;
+
+        private void PumpSnapshotLoad()
+        {
+            if (!_snapshotLoading) return;
+            bool stillLoading = true;
+            try { stillLoading = SmoothLoader.isLoading(); } catch { stillLoading = false; }
+            if (stillLoading) return;
+            _snapshotLoading = false;
+            _appliedEpoch = _loadingEpoch;
+            _kingToLocal.Clear();   // post-load actors carry king ids; new spawns repopulate the map
+            UI.PingHud.ClearTransfer();
+            ModLog.Info($"World snapshot loaded (epoch {_appliedEpoch}).");
+            ReplayPostSnapshot(_loadingTransferId);
+        }
+
+        private void OnSnapshotMark(MirrorMessage msg)
+        {
+            if (IsKing) return;
+            try
+            {
+                var r = new LiteNetLib.Utils.NetDataReader(msg.Payload);
+                int transferId = r.GetInt();
+                string target = r.GetString();
+                if (target.Length > 0 && target != NetClient.Instance.Id4) return;   // someone else's join
+                // A newer snapshot already contains everything buffered for an older one.
+                _awaitTransferId = transferId;
+                _postSnapshotBuffer.Clear();
+                ModLog.Info($"[sync] snapshot mark {transferId}: buffering live changes until it loads");
+            }
+            catch (Exception e) { ModLog.Warn("SnapshotMark: " + e.Message); }
+        }
+
+        private void ReplayPostSnapshot(int transferId)
+        {
+            // A newer snapshot is already on its way: keep holding for that one.
+            if (_awaitTransferId >= 0 && _awaitTransferId != transferId) return;
+            _awaitTransferId = -1;
+            var batch = _postSnapshotBuffer.ToArray();
+            _postSnapshotBuffer.Clear();
+            var kinds = new Dictionary<MirrorKind, int>();
+            foreach (var m in batch) { var k = (MirrorKind)m.Kind; kinds[k] = kinds.TryGetValue(k, out var n) ? n + 1 : 1; }
+            var parts = new List<string>();
+            foreach (var kv in kinds) parts.Add(kv.Key + "=" + kv.Value);
+            ModLog.Info($"[sync] snapshot {transferId} loaded: replaying {batch.Length} live changes made during the transfer ({string.Join(", ", parts)})");
+            _replaying = true;
+            try { foreach (var m in batch) OnMirror(m); }
+            finally { _replaying = false; }
+        }
+
         private void OnMirror(MirrorMessage msg)
         {
+            if ((MirrorKind)msg.Kind == MirrorKind.SnapshotMark) { OnSnapshotMark(msg); return; }
+            if ((_awaitTransferId >= 0 || _snapshotLoading) && !_replaying && !IsKing)
+            {
+                // Copy: LiteNetLib's packet processor hands every MirrorMessage through ONE reused
+                // instance, so storing `msg` itself would leave N references to the last packet.
+                if (_postSnapshotBuffer.Count < MaxPostSnapshotBuffer)
+                    _postSnapshotBuffer.Add(new MirrorMessage { Kind = msg.Kind, SenderId4 = msg.SenderId4, Epoch = msg.Epoch, Payload = msg.Payload });
+                else if (_postSnapshotBuffer.Count == MaxPostSnapshotBuffer)
+                {
+                    // Pathological: a transfer that never finishes. Stop holding; ask for a fresh one.
+                    ModLog.Warn("[sync] post-snapshot buffer full; requesting a resync");
+                    _awaitTransferId = -1; _postSnapshotBuffer.Clear();
+                    NetClient.Instance?.RequestResync();
+                }
+                return;
+            }
             // Epoch gate: drop anything from a different world generation than the one
             // we're on. Also silences everything on a fresh follower (_appliedEpoch 0)
             // until its first snapshot lands - mirrors must never touch the menu world.
@@ -740,6 +903,12 @@ namespace WorldboxMP.Client.Mirror
                 case MirrorKind.MagnetDrag:
                     // A follower is dragging the magnet: drive their RemoteMagnet session.
                     if (IsKing) RemoteMagnet.OnDrag(msg.SenderId4, MirrorCodec.ReadGodPower(msg.Payload));
+                    break;
+                case MirrorKind.ActorRoster:
+                    if (IsFollower) ApplyActorRoster(msg.Payload);
+                    break;
+                case MirrorKind.ActorRequest:
+                    if (IsKing) AnswerActorRequest(msg.Payload);
                     break;
                 case MirrorKind.GodPower:
                     ApplyGodPower(MirrorCodec.ReadGodPower(msg.Payload));
@@ -902,6 +1071,9 @@ namespace WorldboxMP.Client.Mirror
                 //    fields internally, so we never touch ActorData fields ourselves).
                 var actorData = JsonConvert.DeserializeObject<ActorData>(m.ActorJson, JsonHelper.read_settings);
                 if (actorData == null) { ModLog.Warn("[FOLLOWER] spawn: actorData deserialized null"); return; }
+                // Already here (a roster re-send, or a duplicate): keep it. Its state is kept
+                // current by the record stream; reloading would reset it.
+                if (World.world.units.get(actorData.id) != null) return;
                 var a = World.world.units.loadObject(actorData);
                 if (a != null)
                 {
@@ -1063,20 +1235,38 @@ namespace WorldboxMP.Client.Mirror
                         }
                         if (existing != null)
                         {
-                            if (r.ReloadInstance != null) { r.ReloadInstance.Invoke(existing, new[] { data }); DbgObjRecv++; }
+                            // Adopt the king's data in place. Cities/kingdoms have dedicated updaters;
+                            // cultures/religions/languages/clans/families/armies use loadData. Buildings
+                            // are never re-sent, so they keep the plain "already have it" skip.
+                            var update = r.ReloadInstance ?? (r.Kind != 9 ? r.LoadData : null);
+                            if (update != null) { update.Invoke(existing, new[] { data }); DbgObjRecv++; }
                             LinkObjectRefs(r.Kind, existing);
+                            if (r.Kind < ObjAppliedByKind.Length) ObjAppliedByKind[r.Kind]++;
                             return;   // already have it - never re-loadObject (throws on duplicate id)
                         }
                         var load = AccessTools.Method(mgr.GetType(), "loadObject", new[] { r.DataType });
                         var created = load?.Invoke(mgr, new[] { data });
                         LinkObjectRefs(r.Kind, created);
                         DbgObjRecv++;
+                        if (r.Kind < ObjAppliedByKind.Length) ObjAppliedByKind[r.Kind]++;
+                        RetryPendingMembers();   // memberships that arrived before this object
                         return;
                     }
             }
-            catch (Exception e) { ModLog.Warn($"ApplyObject(kind={m.Kind}) failed: " + e.Message); }
+            catch (Exception e)
+            {
+                if (m.Kind < ObjFailedByKind.Length) ObjFailedByKind[m.Kind]++;
+                if (_applyObjFail < 20)
+                {
+                    _applyObjFail++;
+                    var ie = e.InnerException ?? e;
+                    string asset = ""; try { var mm = System.Text.RegularExpressions.Regex.Match(m.Json ?? "", @"""asset_id""\s*:\s*""([^""]*)"""); if (mm.Success) asset = " asset=" + mm.Groups[1].Value; } catch { }
+                    ModLog.Warn($"ApplyObject(kind={m.Kind}{asset}) failed: {ie.GetType().Name}: {ie.Message}" + (_applyObjFail <= 3 ? "\n" + ie.StackTrace : ""));
+                }
+            }
             finally { _applyingObject = false; }
         }
+        private int _applyObjFail;
 
         // Mid-game synced kingdoms/cities arrive via loadObject, which does NOT run the
         // world loader's link pass - so kingdom.king / city.leader stay null on followers
@@ -1108,6 +1298,11 @@ namespace WorldboxMP.Client.Mirror
                     long haveKing = 0;
                     try { haveKing = k.king != null ? k.king.id : 0; } catch { }
                     if (wantKing != haveKing) _kingdomLoad2?.Invoke(k, null);
+                    // setData swaps the data but leaves the live refs: re-link them from the ids.
+                    var kd2 = _kingdomDataF?.GetValue(k) as KingdomData;
+                    if (kd2 != null) LinkMeta(k.culture, kd2.id_culture, World.world.cultures, c => k.setCulture(c),
+                                              k.language, kd2.id_language, World.world.languages, l => k.setLanguage(l),
+                                              k.religion, kd2.id_religion, World.world.religions, r => k.setReligion(r));
                 }
                 else if (kind == 2 && obj is City c)
                 {
@@ -1124,10 +1319,79 @@ namespace WorldboxMP.Client.Mirror
                     long haveLeader = 0;
                     try { haveLeader = c.leader != null ? c.leader.id : 0; } catch { }
                     if (wantLeader != haveLeader) c.loadLeader();
+                    // loadCity re-links these too, but only while the target already exists on
+                    // this follower - so a city that arrived before its culture stayed blank.
+                    var cd2 = _cityDataF?.GetValue(c) as CityData;
+                    if (cd2 != null) LinkMeta(c.culture, cd2.id_culture, World.world.cultures, x => c.setCulture(x),
+                                              c.language, cd2.id_language, World.world.languages, x => c.setLanguage(x),
+                                              c.religion, cd2.id_religion, World.world.religions, x => c.setReligion(x));
                 }
             }
             catch (Exception e) { if (_linkErr < 4) { _linkErr++; ModLog.Warn($"LinkObjectRefs(kind={kind}): " + (e.InnerException ?? e).Message); } }
         }
+
+        /// <summary>Point an owner's live culture/language/religion at the objects its data names.</summary>
+        private static void LinkMeta(Culture curC, long wantC, CultureManager cultures, Action<Culture> setC,
+                                     Language curL, long wantL, LanguageManager languages, Action<Language> setL,
+                                     Religion curR, long wantR, ReligionManager religions, Action<Religion> setR)
+        {
+            if (wantC > 0 && (curC == null || curC.id != wantC)) { var x = cultures.get(wantC); if (x != null) setC(x); }
+            if (wantL > 0 && (curL == null || curL.id != wantL)) { var x = languages.get(wantL); if (x != null) setL(x); }
+            if (wantR > 0 && (curR == null || curR.id != wantR)) { var x = religions.get(wantR); if (x != null) setR(x); }
+        }
+
+        // ── Follower self-repair ────────────────────────────────────────────
+        // Membership messages can arrive before the culture/clan/... they point at (create
+        // events race, or the object only shows up on the next periodic re-send). Those used
+        // to be dropped for good. Keep them briefly and retry whenever a new object lands.
+        private struct PendingMember { public MemberMsg Msg; public float Until; }
+        private readonly List<PendingMember> _pendingMembers = new List<PendingMember>();
+
+        private void RetryPendingMembers()
+        {
+            if (_pendingMembers.Count == 0) return;
+            var batch = _pendingMembers.ToArray();
+            _pendingMembers.Clear();
+            float now = UnityEngine.Time.unscaledTime;
+            foreach (var p in batch)
+                if (p.Until > now && !TryApplyMember(p.Msg)) _pendingMembers.Add(p);
+        }
+
+        /// <summary>Every second on followers: every actor's live culture/religion/language/clan/
+        /// family/army/city must match the ids in its own data (spawn snapshots and membership
+        /// messages write those ids even when the target wasn't there yet).</summary>
+        private float _relinkTimer;
+        private void RelinkActorsFromData(float dt)
+        {
+            _relinkTimer += dt;
+            if (_relinkTimer < 1f) return;
+            _relinkTimer = 0f;
+            RetryPendingMembers();
+            var w = World.world; var units = w?.units?.getSimpleList();
+            if (units == null) return;
+            _applyingMember = true;
+            try
+            {
+                foreach (var a in units)
+                {
+                    if (a == null || !a.isAlive()) continue;
+                    var d = _actorDataField?.GetValue(a) as ActorData;
+                    if (d == null) continue;
+                    try
+                    {
+                        if (d.culture > 0 && (a.culture == null || a.culture.id != d.culture)) { var x = w.cultures.get(d.culture); if (x != null) a.setCulture(x); }
+                        if (d.religion > 0 && (a.religion == null || a.religion.id != d.religion)) { var x = w.religions.get(d.religion); if (x != null) a.setReligion(x); }
+                        if (d.language > 0 && (a.language == null || a.language.id != d.language)) { var x = w.languages.get(d.language); if (x != null) a.joinLanguage(x); }
+                        if (d.clan > 0 && (a.clan == null || a.clan.id != d.clan)) { var x = w.clans.get(d.clan); if (x != null) a.setClan(x); }
+                        if (d.family > 0 && (a.family == null || a.family.id != d.family)) { var x = w.families.get(d.family); if (x != null) a.setFamily(x); }
+                        if (d.army > 0 && (a.army == null || a.army.id != d.army)) { var x = w.armies.get(d.army); if (x != null) a.setArmy(x); }
+                    }
+                    catch (Exception e) { if (_relinkErr < 5) { _relinkErr++; ModLog.Warn("relink actor: " + e.Message); } }
+                }
+            }
+            finally { _applyingMember = false; }
+        }
+        private int _relinkErr;
 
         private void ApplyObjectRemove(ObjectRemoveMsg m)
         {
@@ -1173,20 +1437,32 @@ namespace WorldboxMP.Client.Mirror
 
         private void ApplyMember(MemberMsg m)
         {
-            var a = Resolve(m.ActorId); if (a == null) return;
+            if (!TryApplyMember(m))
+                _pendingMembers.Add(new PendingMember { Msg = m, Until = UnityEngine.Time.unscaledTime + 30f });
+        }
+
+        /// <summary>False when the actor or target doesn't exist here (yet).</summary>
+        private bool TryApplyMember(MemberMsg m)
+        {
+            var a = Resolve(m.ActorId); if (a == null) return false;
+            var w = World.world;
             _applyingMember = true;
             try
             {
                 switch (m.Kind)
                 {
-                    case MemberKind.Kingdom: var k = World.world.kingdoms.get(m.TargetId); if (k != null) a.joinKingdom(k); break;
-                    case MemberKind.Religion: var r = World.world.religions.get(m.TargetId); if (r != null) a.setReligion(r); break;
-                    case MemberKind.Culture: var c = World.world.cultures.get(m.TargetId); if (c != null) a.setCulture(c); break;
-                    case MemberKind.Language: var l = World.world.languages.get(m.TargetId); if (l != null) a.joinLanguage(l); break;
-                    case MemberKind.City: var ci = World.world.cities.get(m.TargetId); if (ci != null) a.joinCity(ci); break;
+                    case MemberKind.Kingdom: { var x = w.kingdoms.get(m.TargetId); if (x == null) return false; a.joinKingdom(x); break; }
+                    case MemberKind.Religion: { var x = w.religions.get(m.TargetId); if (x == null) return false; a.setReligion(x); break; }
+                    case MemberKind.Culture: { var x = w.cultures.get(m.TargetId); if (x == null) return false; a.setCulture(x); break; }
+                    case MemberKind.Language: { var x = w.languages.get(m.TargetId); if (x == null) return false; a.joinLanguage(x); break; }
+                    case MemberKind.City: { var x = w.cities.get(m.TargetId); if (x == null) return false; a.joinCity(x); break; }
+                    case MemberKind.Clan: { var x = w.clans.get(m.TargetId); if (x == null) return false; a.setClan(x); break; }
+                    case MemberKind.Family: { var x = w.families.get(m.TargetId); if (x == null) return false; a.setFamily(x); break; }
+                    case MemberKind.Army: { var x = w.armies.get(m.TargetId); if (x == null) return false; a.setArmy(x); break; }
                 }
+                return true;
             }
-            catch (Exception e) { ModLog.Warn("ApplyMember failed: " + e.Message); }
+            catch (Exception e) { ModLog.Warn("ApplyMember failed: " + e.Message); return true; }
             finally { _applyingMember = false; }
         }
 
@@ -1441,14 +1717,25 @@ namespace WorldboxMP.Client.Mirror
                 if (a == null || !a.isAlive()) continue;
                 try
                 {
-                    if (kind == PollKind.Age)
+                    switch (kind)
                     {
-                        var data = _actorDataField?.GetValue(a) as ActorData;
-                        if (data != null)
-                        {
-                            int delta = m.V - a.getAge();      // king age - follower age
-                            if (delta != 0) data.age_overgrowth += delta;
-                        }
+                        case PollKind.Age:
+                            var data = _actorDataField?.GetValue(a) as ActorData;
+                            if (data != null)
+                            {
+                                int delta = m.V - a.getAge();      // king age - follower age
+                                if (delta != 0) data.age_overgrowth += delta;
+                            }
+                            break;
+                        case PollKind.Overgrowth:
+                            var dog = _actorDataField?.GetValue(a) as ActorData;
+                            if (dog != null) dog.age_overgrowth = m.V;
+                            break;
+                        case PollKind.Health: a.setHealth(m.V, false); break;
+                        case PollKind.Nutrition: a.setNutrition(m.V, false); break;
+                        case PollKind.Happiness: a.setHappiness(m.V, false); break;
+                        case PollKind.Stamina: a.setStamina(m.V, false); break;
+                        case PollKind.Mana: a.setMana(m.V, false); break;
                     }
                 }
                 catch { }
@@ -1460,6 +1747,30 @@ namespace WorldboxMP.Client.Mirror
         // then recompute derived stats. Fixes drifted traits/statuses (health 1/1, low damage,
         // wrong speed) that granular events missed. We re-apply traits + vitals only (kingdom/
         // city/equipment sync via their own events); we do NOT call the full loadFromSave.
+        // Patch merge settings. Two traps in the game's own settings: (1) Json.NET's default
+        // merge APPENDS to existing lists (doubled every trait on a saved_traits patch), and
+        // (2) the game uses DefaultValueHandling.IgnoreAndPopulate, which resets every field
+        // NOT in the patch to its [DefaultValue] (health 100, happiness 0, city -1...).
+        private static JsonSerializerSettings _patchSettings;
+        private static JsonSerializerSettings PatchSettings
+        {
+            get
+            {
+                if (_patchSettings != null) return _patchSettings;
+                var src = JsonHelper.read_settings;
+                _patchSettings = new JsonSerializerSettings
+                {
+                    ObjectCreationHandling = ObjectCreationHandling.Replace,
+                    NullValueHandling = src.NullValueHandling,
+                    DefaultValueHandling = DefaultValueHandling.Include,   // never touch fields absent from the patch
+                    MissingMemberHandling = src.MissingMemberHandling,
+                    ContractResolver = src.ContractResolver,
+                    Converters = src.Converters,
+                };
+                return _patchSettings;
+            }
+        }
+
         private void ApplyActorResync(List<ActorStateMsg> list)
         {
             if (list == null) return;
@@ -1470,10 +1781,30 @@ namespace WorldboxMP.Client.Mirror
                 if (a == null || !a.isAlive()) continue;
                 try
                 {
-                    var data = JsonConvert.DeserializeObject<ActorData>(m.Json, JsonHelper.read_settings);
-                    if (data == null) continue;
-                    a.setData(data);
-                    try { TraitTools.loadTraits(a, data.saved_traits); } catch { }   // force trait list to match king
+                    ActorData data;
+                    bool traitsChanged = true;
+                    if (m.Mode == ActorStateMode.Patch)
+                    {
+                        // Merge only the changed fields into this actor's own data.
+                        data = _actorDataField?.GetValue(a) as ActorData;
+                        if (data == null) continue;
+                        traitsChanged = false;
+                        if (!string.IsNullOrEmpty(m.Json))
+                        {
+                            JsonConvert.PopulateObject(m.Json, data, PatchSettings);
+                            traitsChanged = m.Json.Contains("\"saved_traits\"");
+                        }
+                        if (!string.IsNullOrEmpty(m.StatsJson))
+                            try { ApplyStats(a, JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, float>>(m.StatsJson)); } catch { }
+                        if (string.IsNullOrEmpty(m.Json)) continue;   // stats-only
+                    }
+                    else
+                    {
+                        data = JsonConvert.DeserializeObject<ActorData>(m.Json, JsonHelper.read_settings);
+                        if (data == null) continue;
+                        a.setData(data);
+                    }
+                    if (traitsChanged) { try { TraitTools.loadTraits(a, data.saved_traits); } catch { } }   // force trait list to match king
                     // Re-apply the live profession: setData only updates data.profession, not the
                     // _profession field the renderer reads - so crowns/leader hats went stale on
                     // followers. Only when changed (setProfession clears cached graphics), and with
@@ -1489,7 +1820,8 @@ namespace WorldboxMP.Client.Mirror
                     }
                     catch (Exception pe) { if (_resyncErr < 5) { _resyncErr++; ModLog.Warn("ApplyActorResync profession: " + (pe.InnerException ?? pe).Message); } }
                     // Authoritative stats from the king (the follower can't derive them - // its genome/subspecies is incomplete). Apply BEFORE vitals so maxHealth is right.
-                    try { ApplyStats(a, JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, float>>(m.StatsJson)); } catch { }
+                    if (m.Mode == ActorStateMode.Full)
+                        try { ApplyStats(a, JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, float>>(m.StatsJson)); } catch { }
                     try { a.setHealth(data.health, false); } catch { }
                     try { a.setNutrition(data.nutrition, false); } catch { }
                     try { a.setStamina(data.stamina, false); } catch { }
@@ -1540,6 +1872,13 @@ namespace WorldboxMP.Client.Mirror
         // ── King streaming (pumped by NetPump) ──────────────────────────────
         public void Pump(float dt)
         {
+            if (Active && IsFollower)
+            {
+                try { PumpSnapshotLoad(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("PumpSnapshotLoad: " + e.Message); } }
+                if (_snapshotLoading) return;
+                try { RelinkActorsFromData(dt); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("RelinkActorsFromData: " + e.Message); } }
+                return;
+            }
             if (!Active || !IsKing) return;
 
             // Each subsystem is isolated: an exception in one must never abort the whole
@@ -1564,6 +1903,12 @@ namespace WorldboxMP.Client.Mirror
                 _lastSpeedId = speed;
                 Send(MirrorKind.SimControl, MirrorCodec.Write(new SimControlMsg { Paused = paused, SpeedId = speed }));
             }
+
+            // Structural objects touched by hooked events this frame.
+            try { FlushPendingSpawns(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("FlushPendingSpawns: " + e.Message); } }
+            try { FlushFreshActors(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("FlushFreshActors: " + e.Message); } }
+            try { FlushDirtyObjects(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("FlushDirtyObjects: " + e.Message); } }
+            TickFullRefresh(dt);
 
             // Flush this frame's movement events (event-based, not polled).
             if (_pendingMoves.Count > 0)
@@ -1600,7 +1945,7 @@ namespace WorldboxMP.Client.Mirror
             _longPollTimer += dt;
             if (_longPollTimer >= 0.5f) { _longPollTimer = 0f; SendLongPoll(); }
             _extraLongPollTimer += dt;
-            if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; SendActorResync(); }   // age/stats are continuous; structural is event-based
+            if (_extraLongPollTimer >= 1.0f) { _extraLongPollTimer = 0f; SendVitals(); SendActorResync(); }   // age/stats are continuous; structural is event-based
         }
 
         // short_poll (100ms): action-visual diff scan. Followers suppress AI, so the king
@@ -1676,7 +2021,114 @@ namespace WorldboxMP.Client.Mirror
         // safety net stays complete (full coverage every units/batch seconds) but the
         // bandwidth is capped and independent of world size.
         private int _resyncCursor;
+        private readonly Dictionary<long, int> _sentStatsHash = new Dictionary<long, int>();
+        public static long ResyncFull, ResyncStatsOnly;   // full records vs patches (dev bridge /traffic)
+        private readonly Dictionary<long, Newtonsoft.Json.Linq.JObject> _sentActorJson = new Dictionary<long, Newtonsoft.Json.Linq.JObject>();
+        private static readonly string[] _volatileFields = { "x", "y", "health", "nutrition", "happiness", "stamina", "mana" };
+        // Fields excluded from the full-record fingerprint: position (Move events) and vitals
+        // (their own change-only scalar stream, SendVitals). What's left changes rarely.
+        private static readonly System.Text.RegularExpressions.Regex _posFields =
+            new System.Text.RegularExpressions.Regex(@"""(x|y|health|nutrition|happiness|stamina|mana)"":-?\d+(\.\d+)?,?", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // Last vitals sent per actor: health, nutrition, happiness, stamina, mana.
+        private readonly Dictionary<long, int[]> _sentVitals = new Dictionary<long, int[]>();
+
+        /// <summary>Every second: stream only the vitals that changed since last sent.
+        /// Replaces shipping ~1 KB of full actor data whenever nutrition ticked down by one.</summary>
+        private void SendVitals()
+        {
+            var units = World.world?.units?.getSimpleList();
+            if (units == null) return;
+            List<ScalarMsg> hp = null, nu = null, ha = null, st = null, ma = null;
+            for (int i = 0; i < units.Count; i++)
+            {
+                var a = units[i];
+                if (a == null || !a.isAlive()) continue;
+                var d = _actorDataField?.GetValue(a) as ActorData;
+                if (d == null) continue;
+                if (!_sentVitals.TryGetValue(a.id, out var v)) { v = new[] { int.MinValue, int.MinValue, int.MinValue, int.MinValue, int.MinValue }; _sentVitals[a.id] = v; }
+                if (v[0] != d.health) { v[0] = d.health; (hp ?? (hp = new List<ScalarMsg>())).Add(new ScalarMsg { Id = a.id, V = d.health }); }
+                if (v[1] != d.nutrition) { v[1] = d.nutrition; (nu ?? (nu = new List<ScalarMsg>())).Add(new ScalarMsg { Id = a.id, V = d.nutrition }); }
+                if (v[2] != d.happiness) { v[2] = d.happiness; (ha ?? (ha = new List<ScalarMsg>())).Add(new ScalarMsg { Id = a.id, V = d.happiness }); }
+                if (v[3] != d.stamina) { v[3] = d.stamina; (st ?? (st = new List<ScalarMsg>())).Add(new ScalarMsg { Id = a.id, V = d.stamina }); }
+                if (v[4] != d.mana) { v[4] = d.mana; (ma ?? (ma = new List<ScalarMsg>())).Add(new ScalarMsg { Id = a.id, V = d.mana }); }
+            }
+            if (hp != null) Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Health, hp));
+            if (nu != null) Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Nutrition, nu));
+            if (ha != null) Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Happiness, ha));
+            if (st != null) Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Stamina, st));
+            if (ma != null) Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Mana, ma));
+        }
         private const int ResyncBatchSize = 60;
+        /// <summary>Build this actor's record message: a full record when there is no baseline
+        /// (or a field reset to default), a field patch when something changed, nothing when
+        /// unchanged. Shared by the rotation and by the immediate post-spawn send.</summary>
+        private bool TryBuildActorState(Actor a, out ActorStateMsg msg)
+        {
+            msg = default;
+            try { a.prepareForSave(); } catch { }
+            var data = _actorDataField?.GetValue(a) as ActorData;
+            if (data == null) return false;
+            var json = JsonConvert.SerializeObject(data, JsonHelper.read_settings);
+            var statsJson = JsonConvert.SerializeObject(ReadStats(a));   // king's computed stats
+            // Field-level diff against what this follower set last received. Position and
+            // vitals are excluded (Move events / SendVitals). Unchanged -> nothing; some
+            // fields changed -> a patch with just those; a field reset to its default
+            // (dropped from the JSON) or no baseline yet -> the full record.
+            int sh = statsJson.GetHashCode();
+            bool statsChanged = !_sentStatsHash.TryGetValue(a.id, out var prevS) || prevS != sh;
+            var cur = Newtonsoft.Json.Linq.JObject.Parse(json);
+            foreach (var f in _volatileFields) cur.Remove(f);
+            byte mode = ActorStateMode.Full;
+            string payload = json;
+            // Rolling safety net: each actor's full record goes out again at most every
+            // ActorFullRefreshPeriod, spread across the rotation (bounded rate, no bursts).
+            float now = UnityEngine.Time.unscaledTime;
+            bool refreshDue = !_lastFullAt.TryGetValue(a.id, out var lastFull) || now - lastFull >= _actorFullPeriod;
+            if (!refreshDue && _sentActorJson.TryGetValue(a.id, out var prev))
+            {
+                var patch = new Newtonsoft.Json.Linq.JObject();
+                bool removed = false;
+                foreach (var prop in cur.Properties())
+                    if (!Newtonsoft.Json.Linq.JToken.DeepEquals(prop.Value, prev[prop.Name])) patch[prop.Name] = prop.Value;
+                foreach (var prop in prev.Properties())
+                    if (cur[prop.Name] == null) { removed = true; break; }
+                if (!removed)
+                {
+                    if (patch.Count == 0 && !statsChanged) return false;   // nothing changed since last sent
+                    mode = ActorStateMode.Patch;
+                    payload = patch.Count == 0 ? "" : patch.ToString(Newtonsoft.Json.Formatting.None);
+                }
+            }
+            _sentActorJson[a.id] = cur;
+            _sentStatsHash[a.id] = sh;
+                if (mode == ActorStateMode.Full) _lastFullAt[a.id] = now;
+            if (mode == ActorStateMode.Full) ResyncFull++; else ResyncStatsOnly++;
+            msg = (new ActorStateMsg { Id = a.id, Mode = mode, Json = payload,
+                StatsJson = (mode == ActorStateMode.Full || statsChanged) ? statsJson : "" });
+            return true;
+        }
+
+        // Actors spawned this frame: their creation message carries creation-time data (city,
+        // kingdom and traits are assigned right after), so send the settled full record on the
+        // next frame instead of waiting up to a whole rotation for it.
+        private readonly List<Actor> _freshActors = new List<Actor>();
+        private readonly Dictionary<long, float> _lastFullAt = new Dictionary<long, float>();
+        // Seconds between an actor's safety-net full records: 30 s, stretched for big worlds so
+        // the total stays around 10 full records per second.
+        private float _actorFullPeriod = 30f;
+        private int _freshFrame;
+
+        private void FlushFreshActors()
+        {
+            if (_freshActors.Count == 0 || UnityEngine.Time.frameCount == _freshFrame) return;
+            var list = new List<ActorStateMsg>(_freshActors.Count);
+            foreach (var a in _freshActors)
+                if (a != null && a.isAlive() && TryBuildActorState(a, out var m)) list.Add(m);
+            _freshActors.Clear();
+            if (list.Count > 0) Send(MirrorKind.ActorResync, MirrorCodec.WriteActorResync(list));
+        }
+
         private void SendActorResync()
         {
             try
@@ -1684,20 +2136,13 @@ namespace WorldboxMP.Client.Mirror
                 var units = World.world?.units?.getSimpleList();
                 if (units == null || units.Count == 0) return;
                 int batch = Math.Min(ResyncBatchSize, units.Count);
+                _actorFullPeriod = Math.Max(30f, units.Count / 10f);
                 var list = new List<ActorStateMsg>(batch);
                 for (int n = 0; n < batch; n++)
                 {
                     var a = units[(_resyncCursor + n) % units.Count];
                     if (a == null || !a.isAlive()) continue;
-                    try { a.prepareForSave(); } catch { }
-                    var data = _actorDataField?.GetValue(a) as ActorData;
-                    if (data == null) continue;
-                    list.Add(new ActorStateMsg
-                    {
-                        Id = a.id,
-                        Json = JsonConvert.SerializeObject(data, JsonHelper.read_settings),
-                        StatsJson = JsonConvert.SerializeObject(ReadStats(a))   // king's computed stats
-                    });
+                    if (TryBuildActorState(a, out var m)) list.Add(m);
                 }
                 _resyncCursor = (_resyncCursor + batch) % units.Count;
                 if (list.Count > 0) Send(MirrorKind.ActorResync, MirrorCodec.WriteActorResync(list));
@@ -1705,30 +2150,138 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn("SendActorResync failed: " + e.Message); }
         }
 
-        // long_poll (500ms): age - derived from world-time + age_overgrowth on the king; we
-        // send the authoritative age so followers (whose passive sim doesn't age identically)
-        // stay matched. Cheap (id+int per actor). Extend here for other ~2Hz scalars.
+        // long_poll (500 ms): change detection for state the game mutates in place without a
+        // hookable method. Ages: followers compute them from the synced clock; only an
+        // age_overgrowth change is sent. Structural sweeps send only objects that changed.
+        private int _metaPollTick;
+        private float _fullRefreshTimer;
+        private const float FullRefreshSeconds = 30f;
+        // Last age_overgrowth sent per actor. Age itself = years since created_time (synced
+        // world clock + spawn data, so followers compute it) + age_overgrowth; only the
+        // overgrowth part ever needs to cross the wire, and it changes rarely.
+        private readonly Dictionary<long, int> _sentOvergrowth = new Dictionary<long, int>();
+
+        /// <summary>Every FullRefreshSeconds: forget what was sent, so the next sweeps re-send
+        /// everything once. The safety net for a dropped or failed apply on a follower.</summary>
+        private void TickFullRefresh(float dt)
+        {
+            _fullRefreshTimer += dt;
+            if (_fullRefreshTimer < FullRefreshSeconds) return;
+            ResetChangeBaselines(includeActorRecords: false);   // actor records refresh on a rolling basis
+            SendActorRoster();
+        }
+
+        /// <param name="includeActorRecords">True on a snapshot: whoever loads it must get
+        /// every record again. The periodic safety net leaves actor records to the rolling
+        /// refresh in TryBuildActorState, so a big world never sends them all in one burst.</param>
+        private void SendActorRoster()
+        {
+            var units = World.world?.units?.getSimpleList();
+            if (units == null) return;
+            var w = new LiteNetLib.Utils.NetDataWriter();
+            var ids = new List<long>(units.Count);
+            foreach (var a in units) if (a != null && a.isAlive()) ids.Add(a.id);
+            w.Put(ids.Count);
+            foreach (var id in ids) w.Put(id);
+            Send(MirrorKind.ActorRoster, w.CopyData());
+        }
+
+        private void ApplyActorRoster(byte[] payload)
+        {
+            var r = new LiteNetLib.Utils.NetDataReader(payload);
+            int n = r.GetInt();
+            var kingIds = new HashSet<long>();
+            for (int i = 0; i < n; i++) kingIds.Add(r.GetLong());
+            var units = World.world?.units?.getSimpleList();
+            if (units == null) return;
+            var mine = new HashSet<long>();
+            int removed = 0;
+            foreach (var a in units.ToArray())
+            {
+                if (a == null || !a.isAlive()) continue;
+                mine.Add(a.id);
+                if (!kingIds.Contains(a.id))
+                {
+                    ApplyObjectRemove(new ObjectRemoveMsg { Kind = ActorRemoveKind, Id = a.id });
+                    removed++;
+                }
+            }
+            var missing = new List<long>();
+            foreach (var id in kingIds) if (!mine.Contains(id)) missing.Add(id);
+            if (missing.Count > 0)
+            {
+                var w = new LiteNetLib.Utils.NetDataWriter();
+                w.Put(missing.Count);
+                foreach (var id in missing) w.Put(id);
+                Send(MirrorKind.ActorRequest, w.CopyData());
+            }
+            if (removed > 0 || missing.Count > 0)
+                ModLog.Info($"[sync] roster: removed {removed} stray actor(s), requested {missing.Count} missing");
+        }
+
+        private void AnswerActorRequest(byte[] payload)
+        {
+            var r = new LiteNetLib.Utils.NetDataReader(payload);
+            int n = Math.Min(r.GetInt(), 2000);
+            for (int i = 0; i < n; i++)
+            {
+                var a = World.world?.units?.get(r.GetLong());
+                if (a != null && a.isAlive()) BroadcastSpawn(a);
+            }
+        }
+
+        private void ResetChangeBaselines(bool includeActorRecords = true)
+        {
+            _fullRefreshTimer = 0f;
+            _sentObjHash.Clear();
+            _sentOvergrowth.Clear();
+            _sentVitals.Clear();
+            _lastWorldAgeHash = 0;
+            if (includeActorRecords) { _sentStatsHash.Clear(); _sentActorJson.Clear(); _lastFullAt.Clear(); }
+        }
+
         private void SendLongPoll()
         {
             try
             {
                 var units = World.world?.units?.getSimpleList();
                 if (units == null) return;
-                var list = new List<ScalarMsg>(units.Count);
+                List<ScalarMsg> list = null;
                 for (int i = 0; i < units.Count; i++)
                 {
                     var a = units[i];
-                    if (a != null && a.isAlive()) list.Add(new ScalarMsg { Id = a.id, V = a.getAge() });
+                    if (a == null || !a.isAlive()) continue;
+                    var d = _actorDataField?.GetValue(a) as ActorData;
+                    if (d == null) continue;
+                    if (_sentOvergrowth.TryGetValue(a.id, out var og) && og == d.age_overgrowth) continue;
+                    _sentOvergrowth[a.id] = d.age_overgrowth;
+                    (list ?? (list = new List<ScalarMsg>())).Add(new ScalarMsg { Id = a.id, V = d.age_overgrowth });
                 }
-                if (list.Count > 0)
-                    Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Age, list));
+                if (list != null)
+                    Send(MirrorKind.LongPoll, MirrorCodec.WriteScalarBatch(PollKind.Overgrowth, list));
 
-                // City/kingdom override (user-approved): cities expand and their name/stats change
-                // continuously, but we only get a create event once. Re-send each city/kingdom so
-                // the follower's territory + name + stats track the king (ApplyObject updates the
-                // existing one in place via loadCity). Cheap: a handful of cities, not per-tile.
-                RefreshStructural(World.world?.cities);
-                RefreshStructural(World.world?.kingdoms);
+                // Structural change detection (events cover zones, culture/language/religion and
+                // renames immediately via MarkDirty). The sweeps below send only objects whose
+                // serialized state differs from what was last sent: population, stats and other
+                // values the game mutates in place with no method to hook.
+                _metaPollTick++;
+                if (_metaPollTick % 4 == 0)   // 2 s
+                {
+                    RefreshStructural(World.world?.cities);
+                    RefreshStructural(World.world?.kingdoms);
+                }
+                if (_metaPollTick % 10 == 5)  // 5 s
+                {
+                    RefreshStructural(World.world?.cultures);
+                    RefreshStructural(World.world?.religions);
+                    RefreshStructural(World.world?.languages);
+                    RefreshStructural(World.world?.clans);
+                    RefreshStructural(World.world?.families);
+                    RefreshStructural(World.world?.armies);
+                    RefreshStructural(World.world?.alliances);
+                    RefreshStructural(World.world?.wars);
+                    RefreshStructural(World.world?.plots);
+                }
                 SendWorldAge();   // world-age state (era_manager isn't advanced on followers)
             }
             catch (Exception e) { ModLog.Warn("SendLongPoll failed: " + e.Message); }
@@ -1736,12 +2289,19 @@ namespace WorldboxMP.Client.Mirror
 
         // Stream the authoritative world-age state (MapStats). Followers don't advance the
         // era_manager (passive sim), so the King pushes age id/slot/progress/slots each long_poll.
+        private int _lastWorldAgeHash;
         private void SendWorldAge()
         {
             try
             {
                 var ms = _mapStatsField?.GetValue(World.world) as MapStats;
                 if (ms == null) return;
+                // Progress moves continuously; quantize it so a slowly advancing era isn't a
+                // message every 500 ms, while any id/slot/pause/speed change goes out at once.
+                int h = (ms.world_age_id ?? "").GetHashCode() ^ (ms.world_age_slot_index * 397) ^ (ms.is_world_ages_paused ? 1 : 2)
+                        ^ ((int)(ms.current_age_progress * 50f) * 7919) ^ ms.world_ages_speed_multiplier.GetHashCode() ^ ms.current_world_ages_duration.GetHashCode();
+                if (h == _lastWorldAgeHash) return;
+                _lastWorldAgeHash = h;
                 Send(MirrorKind.WorldAge, MirrorCodec.Write(new WorldAgeMsg
                 {
                     AgeId = ms.world_age_id, SlotIndex = ms.world_age_slot_index, Progress = ms.current_age_progress,
@@ -1792,7 +2352,7 @@ namespace WorldboxMP.Client.Mirror
                 if (listObj == null) { ModLog.Warn($"RefreshStructural: not enumerable {mgr.GetType().Name}"); return; }
                 var snapshot = new List<object>();
                 foreach (var o in listObj) if (o != null) snapshot.Add(o);
-                foreach (var o in snapshot) OnKingObject(o);
+                foreach (var o in snapshot) OnKingObject(o, onlyIfChanged: true);
             }
             catch (Exception e) { ModLog.Warn($"RefreshStructural({mgr.GetType().Name}) failed: " + e.Message); }
         }
@@ -1816,9 +2376,18 @@ namespace WorldboxMP.Client.Mirror
             // A newer transfer to the same audience supersedes an unfinished one.
             _outgoingSnapshots.RemoveAll(t => t.TargetId4 == targetId4);
             int count = (data.Length + NetProtocol.SnapshotChunkSize - 1) / NetProtocol.SnapshotChunkSize;
+            int transferId = _nextTransferId++;
+            // Whoever loads this snapshot starts from ITS state, not from what was sent before.
+            // Forget every change baseline so the following sweeps send full state again.
+            ResetChangeBaselines();
+            // Cut-over marker on the reliable mirror stream, right after serializing: the
+            // receiver holds every later live change until this snapshot has loaded.
+            var mark = new LiteNetLib.Utils.NetDataWriter();
+            mark.Put(transferId); mark.Put(targetId4 ?? "");
+            Send(MirrorKind.SnapshotMark, mark.CopyData());
             _outgoingSnapshots.Add(new OutgoingSnapshot
             {
-                TargetId4 = targetId4, TransferId = _nextTransferId++, Epoch = _epoch,
+                TargetId4 = targetId4, TransferId = transferId, Epoch = _epoch,
                 Data = data, Count = count
             });
             ModLog.Info($"Snapshot transfer queued: {data.Length} bytes / {count} chunks -> {(targetId4.Length == 0 ? "ALL" : targetId4)} (epoch {_epoch}).");
@@ -1891,12 +2460,13 @@ namespace WorldboxMP.Client.Mirror
             if (_rxChunksGot < _rxChunkCount) return;
 
             var data = _rxSnapshot;
+            int loadedId = _rxTransferId;
             _rxSnapshot = null; _rxTransferId = -1;
+            // Hold live traffic from here until the (multi-frame) load has finished.
+            _snapshotLoading = true; _loadingEpoch = _rxEpoch; _loadingTransferId = loadedId;
             WorldSync.Load(data);
-            _kingToLocal.Clear();   // post-load actors carry king ids; new spawns repopulate the map
-            _appliedEpoch = _rxEpoch;
-            if (big) UI.PingHud.ClearTransfer();
-            ModLog.Info($"World snapshot applied ({data.Length} bytes, epoch {_appliedEpoch}).");
+            ModLog.Info($"World snapshot received ({data.Length} bytes, epoch {_rxEpoch}); loading...");
+            PumpSnapshotLoad();   // tiny worlds may already be done
         }
 
         /// <summary>Hook (MapBox.clearWorld postfix): the local player loaded/generated a
@@ -1933,7 +2503,14 @@ namespace WorldboxMP.Client.Mirror
         /// Drives the on-screen "God King paused" indicator. Not set by the King's menu/window pauses.</summary>
         public static bool KingPaused { get; private set; }
 
-        private void Send(MirrorKind kind, byte[] payload, DeliveryMethod method = DeliveryMethod.ReliableOrdered) =>
+        /// <summary>Bytes / messages sent per MirrorKind since start (dev bridge: /traffic).</summary>
+        public static readonly long[] TxBytesByKind = new long[64], TxCountByKind = new long[64];
+
+        private void Send(MirrorKind kind, byte[] payload, DeliveryMethod method = DeliveryMethod.ReliableOrdered)
+        {
+            int k = (int)kind;
+            if (k >= 0 && k < TxBytesByKind.Length) { TxBytesByKind[k] += payload?.Length ?? 0; TxCountByKind[k]++; }
             NetClient.Instance.SendMirror(kind, payload, CurrentEpoch, method);
+        }
     }
 }

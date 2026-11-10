@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using HarmonyLib;
@@ -17,7 +18,7 @@ using WorldboxMP.Client.Mirror;
 namespace WorldboxMP.Client.Dev
 {
     /// <summary>
-    /// DEBUG-ONLY HTTP control bridge so the dev (Claude) can drive automated test loops:
+    /// DEBUG-ONLY HTTP control bridge so a developer can drive automated test loops:
     /// spawn units, create/join rooms, and read back authoritative state to compare king vs
     /// follower - without manually clicking the game. Each instance binds the first free port
     /// from 8750 and logs it. Unity APIs only run on the main thread, so every request is
@@ -102,6 +103,160 @@ namespace WorldboxMP.Client.Dev
                 case "state": return State();
                 case "connect": net?.Connect(); return Ok("connecting");
                 case "login": net?.Login(Get(q, "user", "testp1"), Get(q, "pass", Get(q, "user", "testp1"))); return Ok("login sent");
+                case "console":
+                    // The game's own log overlay pops up on any error (two instances fight over
+                    // stats.s3db) and covers the UI in screenshots.
+                    try { foreach (var c in Resources.FindObjectsOfTypeAll<global::WorldBoxConsole.Console>()) c.Hide(); }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                    return Ok("console hidden");
+                case "scroll":
+                    try
+                    {
+                        var w = WorldboxMP.Client.UI.MultiplayerWindow.Instance;
+                        ScrollRect sr0 = null;
+                        for (var t = w != null ? w.transform : null; t != null && sr0 == null; t = t.parent) sr0 = t.GetComponent<ScrollRect>();
+                        if (sr0 == null && w != null) sr0 = w.GetComponentInChildren<ScrollRect>(true);
+                        if (sr0 == null) return "{\"error\":\"no ScrollRect\"}";
+                        sr0.verticalNormalizedPosition = float.Parse(Get(q, "pos", "0"), CultureInfo.InvariantCulture);
+                        return Ok("scrolled");
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "scrollprobe":
+                    // Would a mouse-wheel event at the multiplayer window's center reach its ScrollRect?
+                    try
+                    {
+                        var win = WorldboxMP.Client.UI.MultiplayerWindow.Instance;
+                        if (win == null) return "{\"error\":\"no window\"}";
+                        ScrollRect sr = null;
+                        for (var t = win.transform; t != null && sr == null; t = t.parent) sr = t.GetComponent<ScrollRect>();
+                        if (sr == null) sr = win.GetComponentInChildren<ScrollRect>(true);
+                        if (sr == null) return "{\"error\":\"no ScrollRect\"}";
+                        var vpRt = sr.viewport != null ? sr.viewport : (RectTransform)sr.transform;
+                        var corners = new Vector3[4]; vpRt.GetWorldCorners(corners);
+                        var cam = vpRt.GetComponentInParent<Canvas>()?.worldCamera;
+                        string outp = "[";
+                        foreach (float fy in new[] { 0.2f, 0.5f, 0.8f })
+                        {
+                            var world = Vector3.Lerp(corners[0], corners[2], 0.5f); world.y = Mathf.Lerp(corners[0].y, corners[2].y, fy);
+                            var screen = RectTransformUtility.WorldToScreenPoint(cam, world);
+                            var ped = new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current) { position = screen };
+                            var hits = new List<UnityEngine.EventSystems.RaycastResult>();
+                            UnityEngine.EventSystems.EventSystem.current.RaycastAll(ped, hits);
+                            var top = hits.Count > 0 ? hits[0].gameObject : null;
+                            var handler = top != null ? UnityEngine.EventSystems.ExecuteEvents.GetEventHandler<UnityEngine.EventSystems.IScrollHandler>(top) : null;
+                            if (outp.Length > 1) outp += ",";
+                            outp += $"{{\"y\":{fy},\"top\":\"{Esc(top != null ? top.name : "none")}\",\"scrollHandler\":\"{Esc(handler != null ? handler.name : "none")}\",\"isOurScroll\":{(handler == sr.gameObject ? "true" : "false")}}}";
+                        }
+                        float overflow = sr.content != null ? sr.content.rect.height - vpRt.rect.height : 0f;
+                        return "{\"probes\":" + outp + "],\"overflow\":" + overflow.ToString("F0", CultureInfo.InvariantCulture) + ",\"pos\":" + sr.verticalNormalizedPosition.ToString("F2", CultureInfo.InvariantCulture) + "}";
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "cursors": return WorldboxMP.Client.UI.PlayerCursors.Instance?.DebugJson() ?? "{\"error\":\"no cursors\"}";
+                case "meta": return Meta();
+                case "actorjson":
+                    try
+                    {
+                        long want = long.Parse(Get(q, "id", "0"));
+                        foreach (var u in World.world.units.getSimpleList())
+                            if (u != null && u.id == want)
+                            {
+                                try { u.prepareForSave(); } catch { }
+                                var d = AccessTools.Field(typeof(Actor), "data")?.GetValue(u);
+                                return Newtonsoft.Json.JsonConvert.SerializeObject(d, JsonHelper.read_settings);
+                            }
+                        return "{\"error\":\"no actor\"}";
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "traffic":
+                    {
+                        var sbt = new StringBuilder("{");
+                        bool ft = true;
+                        for (int k = 0; k < MirrorManager.TxBytesByKind.Length; k++)
+                        {
+                            if (MirrorManager.TxCountByKind[k] == 0) continue;
+                            if (!ft) sbt.Append(","); ft = false;
+                            sbt.Append("\"" + (MirrorKind)k + "\":[" + MirrorManager.TxCountByKind[k] + "," + MirrorManager.TxBytesByKind[k] + "]");
+                        }
+                        if (!ft) sbt.Append(",");
+                        sbt.Append("\"_resyncFull\":[" + MirrorManager.ResyncFull + ",0],\"_resyncPatch\":[" + MirrorManager.ResyncStatsOnly + ",0]");
+                        return sbt.Append("}").ToString();
+                    }
+                case "actors":
+                    {
+                        var sba = new StringBuilder("[");
+                        try
+                        {
+                            bool f1 = true;
+                            foreach (var u in World.world.units.getSimpleList())
+                            {
+                                if (u == null) continue;
+                                if (!f1) sba.Append(","); f1 = false;
+                                string extra = "";
+                                if (Get(q, "deep", "0") == "1")
+                                {
+                                    try
+                                    {
+                                        var ad = AccessTools.Field(typeof(Actor), "data")?.GetValue(u) as ActorData;
+                                        var tr = ad?.saved_traits != null ? string.Join("+", ad.saved_traits.OrderBy(t => t)) : "";
+                                        extra = $"|hp={ad?.health}|nu={ad?.nutrition}|ha={ad?.happiness}|age={u.getAge()}|og={ad?.age_overgrowth}|dcity={ad?.cityID}|city={u.city?.id}|cul={u.culture?.id}|clan={u.clan?.id}|kd={u.kingdom?.id}|tr={tr}|obj={System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(u)}|dobj={System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(ad)}";
+                                    }
+                                    catch { }
+                                }
+                                sba.Append("\"" + u.id + ":" + Esc(u.asset?.id ?? "?") + (u.isAlive() ? "" : ":dead") + Esc(extra) + "\"");
+                            }
+                        }
+                        catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                        return sba.Append("]").ToString();
+                    }
+                case "logout": net?.Logout(); return Ok("logged out");
+                case "leave": net?.LeaveRoom(); return Ok("left");
+                case "rooms":
+                    {
+                        var sbr = new StringBuilder("[");
+                        if (net != null)
+                            for (int i = 0; i < net.RoomList.Count; i++)
+                            {
+                                var r = net.RoomList[i];
+                                if (i > 0) sbr.Append(",");
+                                sbr.Append($"{{\"id\":\"{Esc(r.ShareableId)}\",\"name\":\"{Esc(r.Name)}\",\"count\":{r.PlayerCount},\"max\":{r.MaxPlayers},\"king\":\"{Esc(r.KingName)}\",\"lobby\":{(r.IsLobby ? "true" : "false")},\"locked\":{(r.HasPassword ? "true" : "false")}}}");
+                            }
+                        return sbr.Append("]").ToString();
+                    }
+                case "shot":
+                    // Full-frame screenshot of THIS instance (written at end of frame).
+                    try
+                    {
+                        string shotPath = Get(q, "path", System.IO.Path.Combine(System.IO.Path.GetTempPath(), "wbmp-shot.png"));
+                        UnityEngine.ScreenCapture.CaptureScreenshot(shotPath);
+                        return Ok("shot " + shotPath);
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "btn":
+                    // Press a button in the multiplayer window by GameObject name (what a click would do).
+                    try
+                    {
+                        string want = Get(q, "name", "");
+                        foreach (var b in Resources.FindObjectsOfTypeAll<Button>())
+                            if (b != null && b.name == want && b.gameObject.activeInHierarchy)
+                            {
+                                if (!b.interactable) return "{\"error\":\"not interactable\"}";
+                                b.onClick.Invoke();
+                                return Ok("clicked " + want);
+                            }
+                        return "{\"error\":\"no active button " + Esc(want) + "\"}";
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "type":
+                    // Set an input field's text by GameObject name (InputField or its NameInput root).
+                    try
+                    {
+                        string want = Get(q, "name", ""), val = Get(q, "text", "");
+                        foreach (var f in Resources.FindObjectsOfTypeAll<InputField>())
+                            if (f != null && f.gameObject.activeInHierarchy && (f.name == want || (f.transform.parent != null && f.transform.parent.name == want)))
+                            { f.text = val; return Ok("typed " + want); }
+                        return "{\"error\":\"no active field " + Esc(want) + "\"}";
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "createroom": net?.CreateRoom(Get(q, "name", "TEST"), Get(q, "pass", ""), RoomVisibility.Unlisted); return Ok("createroom sent");
                 case "joinroom": net?.JoinRoom(Get(q, "id", "").ToUpperInvariant(), Get(q, "pass", "")); return Ok("joinroom sent");
                 case "spawn": return Spawn(q);
@@ -341,6 +496,60 @@ namespace WorldboxMP.Client.Dev
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 default: return "{\"error\":\"unknown endpoint\"}";
             }
+        }
+
+        /// <summary>Meta-object linkage for king/follower comparison: each city/kingdom's live
+        /// culture/religion/language refs vs the ids in its data, plus every culture/religion/language/clan.</summary>
+        private static string Meta()
+        {
+            var sb = new StringBuilder("{");
+            string R(object o)
+            {
+                if (o == null) return "null";
+                try
+                {
+                    var id = AccessTools.Property(o.GetType(), "id")?.GetValue(o);
+                    object nm = AccessTools.Property(o.GetType(), "name")?.GetValue(o);
+                    if (nm == null) nm = AccessTools.Method(o.GetType(), "getName", Type.EmptyTypes)?.Invoke(o, null);
+                    return id + ":" + Esc(Convert.ToString(nm));
+                }
+                catch { return "?"; }
+            }
+            string D(object data, string prop) { try { return Convert.ToString(AccessTools.Property(data.GetType(), prop)?.GetValue(data)); } catch { return "?"; } }
+            void Owners(string label, System.Collections.IEnumerable list)
+            {
+                sb.Append("\"" + label + "\":[");
+                bool first = true;
+                foreach (var o in list)
+                {
+                    if (o == null) continue;
+                    var data = AccessTools.Field(o.GetType(), "data")?.GetValue(o);
+                    if (!first) sb.Append(","); first = false;
+                    sb.Append("\"" + R(o) + " | culture " + R(AccessTools.Field(o.GetType(), "culture")?.GetValue(o)) + " (data " + D(data, "id_culture") + ")"
+                        + " | religion " + R(AccessTools.Field(o.GetType(), "religion")?.GetValue(o)) + " (data " + D(data, "id_religion") + ")"
+                        + " | language " + R(AccessTools.Field(o.GetType(), "language")?.GetValue(o)) + " (data " + D(data, "id_language") + ")\"");
+                }
+                sb.Append("],");
+            }
+            void Plain(string label, System.Collections.IEnumerable list)
+            {
+                sb.Append("\"" + label + "\":[");
+                bool first = true;
+                foreach (var o in list) { if (o == null) continue; if (!first) sb.Append(","); first = false; sb.Append("\"" + R(o) + "\""); }
+                sb.Append("],");
+            }
+            try
+            {
+                var w = World.world;
+                Owners("cities", w.cities); Owners("kingdoms", w.kingdoms);
+                Plain("cultures", w.cultures); Plain("religions", w.religions); Plain("languages", w.languages); Plain("clans", w.clans);
+                Plain("families", w.families); Plain("armies", w.armies);
+            }
+            catch (Exception e) { sb.Append("\"error\":\"" + Esc(e.Message) + "\","); }
+            sb.Append("\"sent\":\"" + string.Join(",", MirrorManager.ObjSentByKind) + "\",");
+            sb.Append("\"applied\":\"" + string.Join(",", MirrorManager.ObjAppliedByKind) + "\",");
+            sb.Append("\"failed\":\"" + string.Join(",", MirrorManager.ObjFailedByKind) + "\",");
+            return sb.Append("\"ok\":true}").ToString();
         }
 
         private static string Spawn(Dictionary<string, string> q)

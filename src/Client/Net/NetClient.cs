@@ -12,6 +12,10 @@ namespace WorldboxMP.Client.Net
     /// Client-side LiteNetLib connection to the multiplayer server. All callbacks
     /// fire on the Unity main thread because <see cref="Poll"/> is driven from a
     /// MonoBehaviour Update, so handlers may safely touch game/UI objects.
+    ///
+    /// Resilience: a "remember me" session token (per server, in PlayerPrefs) signs the
+    /// player back in on every (re)connect, and an involuntary drop while in a room
+    /// rejoins that room automatically once signed in again.
     /// </summary>
     public class NetClient
     {
@@ -42,11 +46,37 @@ namespace WorldboxMP.Client.Net
         public List<RoomSummary> RoomList { get; private set; } = new List<RoomSummary>();
         public List<LogEntry> Logs { get; private set; } = new List<LogEntry>();
 
+        /// <summary>Why the last connection ended / was refused (empty while fine).</summary>
+        public string LastDisconnectReason { get; private set; } = "";
+
+        /// <summary>A login/register/token request is in flight.</summary>
+        public bool AuthPending { get; private set; }
+
+        /// <summary>Signing in with a remembered session right now (UI shows a spinner, not the form).</summary>
+        public bool ResumingSession => AuthPending && _authViaToken;
+
+        /// <summary>A create/join request is in flight.</summary>
+        public bool RoomPending { get; private set; }
+
+        /// <summary>Dev tooling (per-instance test accounts) turns remembered sessions off.</summary>
+        public bool DisableTokenLogin { get; set; }
+
+        private bool _authViaToken;
+        private bool _suppressAutoLogin;       // set after "signed in elsewhere" until a manual login
+        private string _pendingJoinPassword = "";
+        private string _roomPassword = "";
+        private string _rejoinRoomId = "";      // room to re-enter after an involuntary drop
+        private string _rejoinPassword = "";
+
         // ── Events for the UI ───────────────────────────────────────────────
         public event Action<ConnState> OnStateChanged;
         public event Action<AuthResponse> OnAuth;
         public event Action<RoomJoined> OnRoomJoined;
+        /// <summary>We left the current room (reason empty = voluntary; else kicked/closed).</summary>
+        public event Action<string> OnRoomLeft;
         public event Action<string> OnRoomError;
+        /// <summary>Announcement from the server operator (admin panel).</summary>
+        public event Action<string> OnServerNotice;
         public event Action OnRosterChanged;
         public event Action OnRoomListChanged;
         public event Action OnLogsChanged;
@@ -109,19 +139,103 @@ namespace WorldboxMP.Client.Net
         private void ResetSession()
         {
             LoggedIn = false; Id4 = ""; Username = "";
-            RoomId = ""; RoomName = ""; MyRole = RoomRole.Player;
-            Roster.Clear(); RoomList.Clear(); Logs.Clear();
+            ClearRoom();
+            RoomList.Clear(); Logs.Clear();
+            AuthPending = false; _authViaToken = false; RoomPending = false;
             LastPingMs = -1;
         }
 
+        private void ClearRoom()
+        {
+            RoomId = ""; RoomName = ""; MyRole = RoomRole.Player; _roomPassword = "";
+            Roster.Clear();
+        }
+
+        // ── Remembered session (per server endpoint) ───────────────────────
+        private string TokenKey => "wbmp_session_" + _host + ":" + _port;
+        private string SavedToken
+        {
+            get => UnityEngine.PlayerPrefs.GetString(TokenKey, "");
+            set
+            {
+                if (string.IsNullOrEmpty(value)) UnityEngine.PlayerPrefs.DeleteKey(TokenKey);
+                else UnityEngine.PlayerPrefs.SetString(TokenKey, value);
+                UnityEngine.PlayerPrefs.Save();
+            }
+        }
+
+        /// <summary>True when this server has a remembered session for us.</summary>
+        public bool HasSavedSession => !DisableTokenLogin && SavedToken.Length > 0;
+
+        private void TryResumeSession()
+        {
+            if (LoggedIn || AuthPending || _suppressAutoLogin || DisableTokenLogin) return;
+            string token = SavedToken;
+            if (token.Length == 0) return;
+            AuthPending = true; _authViaToken = true;
+            Send(new TokenLoginRequest { Token = token });
+        }
+
         // ── Outgoing API ────────────────────────────────────────────────────
-        public void Register(string user, string pass) => Send(new RegisterRequest { Username = user, Password = pass });
-        public void Login(string user, string pass) => Send(new LoginRequest { Username = user, Password = pass });
-        public void CreateRoom(string name, string password, RoomVisibility vis) =>
-            Send(new CreateRoomRequest { Name = name, Password = password ?? "", Visibility = (byte)vis });
-        public void JoinRoom(string id, string password) =>
-            Send(new JoinRoomRequest { ShareableId = id, Password = password ?? "" });
-        public void LeaveRoom() { Send(new LeaveRoomRequest()); RoomId = ""; RoomName = ""; Roster.Clear(); OnRosterChanged?.Invoke(); }
+        /// <summary>Register = create the account and sign in, remembered.</summary>
+        public void Register(string user, string pass)
+        {
+            if (!CanSend || AuthPending) return;
+            _suppressAutoLogin = false;
+            AuthPending = true; _authViaToken = false;
+            Send(new RegisterRequest { Username = user ?? "", Password = pass ?? "" });
+            OnStateChanged?.Invoke(State);
+        }
+
+        public void Login(string user, string pass, bool remember = false)
+        {
+            if (!CanSend || AuthPending) return;
+            _suppressAutoLogin = false;
+            AuthPending = true; _authViaToken = false;
+            Send(new LoginRequest { Username = user ?? "", Password = pass ?? "", Remember = remember && !DisableTokenLogin });
+            OnStateChanged?.Invoke(State);
+        }
+
+        /// <summary>Sign out: forget the remembered session here and on the server.</summary>
+        public void Logout()
+        {
+            Send(new LogoutRequest { Token = SavedToken });
+            SavedToken = "";
+            _rejoinRoomId = "";
+            bool wasInRoom = InRoom;
+            LoggedIn = false; Id4 = ""; Username = "";
+            ClearRoom(); RoomList.Clear();
+            if (wasInRoom) OnRoomLeft?.Invoke("");
+            OnRosterChanged?.Invoke();
+            OnStateChanged?.Invoke(State);
+        }
+
+        public void CreateRoom(string name, string password, RoomVisibility vis)
+        {
+            if (!CanSend || RoomPending) return;
+            RoomPending = true; _pendingJoinPassword = password ?? "";
+            Send(new CreateRoomRequest { Name = name ?? "", Password = password ?? "", Visibility = (byte)vis });
+        }
+
+        public void JoinRoom(string id, string password)
+        {
+            if (!CanSend || RoomPending) return;
+            RoomPending = true; _pendingJoinPassword = password ?? "";
+            Send(new JoinRoomRequest { ShareableId = (id ?? "").Trim().ToUpperInvariant(), Password = password ?? "" });
+        }
+
+        public void LeaveRoom()
+        {
+            _rejoinRoomId = "";
+            if (!InRoom) return;
+            Send(new LeaveRoomRequest());
+            // Leave locally right away (the server's RoomLeft confirmation is then a no-op).
+            ClearRoom();
+            OnRoomLeft?.Invoke("");
+            OnRosterChanged?.Invoke();
+        }
+
+        private bool CanSend => _server != null && State == ConnState.Connected;
         public void RequestRoomList() => Send(new RoomListRequest());
         public void RequestLogs() => Send(new LogListRequest());
         public void Kick(string id4) => Send(new ModerationRequest { Action = ModerationRequest.ACTION_KICK, TargetId4 = id4 });
@@ -150,8 +264,27 @@ namespace WorldboxMP.Client.Net
         // ── Wiring ──────────────────────────────────────────────────────────
         private void WireEvents()
         {
-            _listener.PeerConnectedEvent += peer => { _server = peer; SetState(ConnState.Connected); };
-            _listener.PeerDisconnectedEvent += (peer, info) => { ResetSession(); SetState(ConnState.Disconnected); };
+            _listener.PeerConnectedEvent += peer =>
+            {
+                _server = peer;
+                LastDisconnectReason = "";
+                SetState(ConnState.Connected);
+                TryResumeSession();
+            };
+            _listener.PeerDisconnectedEvent += (peer, info) =>
+            {
+                string detail = "";
+                try { if (info.AdditionalData != null && info.AdditionalData.AvailableBytes > 0) detail = info.AdditionalData.GetString(200); }
+                catch { }
+                LastDisconnectReason = DescribeDisconnect(info.Reason, detail);
+                if (detail == NetProtocol.SignedInElsewhere) { _suppressAutoLogin = true; _rejoinRoomId = ""; }
+                else if (InRoom) { _rejoinRoomId = RoomId; _rejoinPassword = _roomPassword; }
+                bool wasInRoom = InRoom;
+                ResetSession();
+                if (wasInRoom) OnRoomLeft?.Invoke(LastDisconnectReason);
+                SetState(ConnState.Disconnected);
+                OnRosterChanged?.Invoke();
+            };
             _listener.NetworkReceiveEvent += (peer, reader, channel, method) =>
             {
                 try { _proc.ReadAllPackets(reader); }
@@ -163,7 +296,9 @@ namespace WorldboxMP.Client.Net
         {
             _proc.SubscribeNetSerializable<AuthResponse>(OnAuthResponse);
             _proc.SubscribeNetSerializable<RoomJoined>(OnRoomJoinedPacket);
-            _proc.SubscribeNetSerializable<RoomError>(p => OnRoomError?.Invoke(p.Message));
+            _proc.SubscribeNetSerializable<RoomError>(OnRoomErrorPacket);
+            _proc.SubscribeNetSerializable<RoomLeft>(OnRoomLeftPacket);
+            _proc.SubscribeNetSerializable<ServerNotice>(p => OnServerNotice?.Invoke(p.Text ?? ""));
             _proc.SubscribeNetSerializable<RoomRoster>(OnRosterPacket);
             _proc.SubscribeNetSerializable<RoomListResponse>(p => { RoomList = p.Rooms; OnRoomListChanged?.Invoke(); });
             _proc.SubscribeNetSerializable<LogListResponse>(p => { Logs = p.Entries; OnLogsChanged?.Invoke(); });
@@ -211,6 +346,7 @@ namespace WorldboxMP.Client.Net
             try { _net.Stop(); } catch { }          // fully tear down (DisconnectAll+reconnect on one manager is unreliable)
             _server = null;
             ResetSession();
+            _rejoinRoomId = ""; _suppressAutoLogin = false; LastDisconnectReason = "";
             SetState(ConnState.Disconnected);        // lets dev auto-login re-arm
             _net.Start();
             SetState(ConnState.Connecting);
@@ -222,14 +358,63 @@ namespace WorldboxMP.Client.Net
 
         private void OnAuthResponse(AuthResponse p)
         {
-            if (p.Ok) { LoggedIn = true; Id4 = p.Id4; Username = p.Username; }
+            AuthPending = false; _authViaToken = false;
+            if (p.Ok)
+            {
+                LoggedIn = true; Id4 = p.Id4; Username = p.Username;
+                if (!string.IsNullOrEmpty(p.Token) && !DisableTokenLogin) SavedToken = p.Token;
+            }
+            else if (p.ViaToken) SavedToken = "";   // expired/revoked: fall back to the form
             OnAuth?.Invoke(p);
+
+            // Back after an involuntary drop: re-enter the room we were in.
+            if (p.Ok && _rejoinRoomId.Length > 0)
+            {
+                string id = _rejoinRoomId, pw = _rejoinPassword;
+                _rejoinRoomId = ""; _rejoinPassword = "";
+                JoinRoom(id, pw);
+            }
         }
 
         private void OnRoomJoinedPacket(RoomJoined p)
         {
+            RoomPending = false;
             RoomId = p.ShareableId; RoomName = p.Name; MyRole = (RoomRole)p.MyRole;
+            _roomPassword = _pendingJoinPassword; _pendingJoinPassword = "";
             OnRoomJoined?.Invoke(p);
+        }
+
+        private void OnRoomErrorPacket(RoomError p)
+        {
+            RoomPending = false;
+            OnRoomError?.Invoke(p.Message);
+        }
+
+        private void OnRoomLeftPacket(RoomLeft p)
+        {
+            RoomPending = false;
+            if (!InRoom || (p.ShareableId.Length > 0 && p.ShareableId != RoomId)) return;   // already left locally
+            ClearRoom();
+            OnRoomLeft?.Invoke(p.Reason ?? "");
+            OnRosterChanged?.Invoke();
+        }
+
+        private static string DescribeDisconnect(DisconnectReason reason, string detail)
+        {
+            if (!string.IsNullOrEmpty(detail)) return detail;
+            switch (reason)
+            {
+                case DisconnectReason.ConnectionFailed:
+                case DisconnectReason.HostUnreachable:
+                case DisconnectReason.NetworkUnreachable:
+                    return "Can't reach the server.";
+                case DisconnectReason.UnknownHost: return "Unknown server address.";
+                case DisconnectReason.Timeout: return "Connection lost (timed out).";
+                case DisconnectReason.ConnectionRejected: return "The server refused the connection (outdated mod?).";
+                case DisconnectReason.RemoteConnectionClose: return "The server closed the connection.";
+                case DisconnectReason.DisconnectPeerCalled: return "";
+                default: return "Disconnected (" + reason + ").";
+            }
         }
 
         private void OnRosterPacket(RoomRoster p)

@@ -163,6 +163,23 @@ namespace WorldboxMP.Shared.Protocol
         /// drives a per-player RemoteMagnet and drops on a short silence timeout. Payload is
         /// a GodPowerMsg (PowerId + tile).</summary>
         MagnetDrag = 34,
+
+        /// <summary>King → followers, sent on the reliable mirror stream at the exact moment a
+        /// world snapshot is serialized. Everything AFTER this marker happened after the
+        /// snapshot, so the snapshot's receiver buffers it and replays it once the snapshot
+        /// has loaded (otherwise changes made during a join/resync hit the old world or were
+        /// wiped by the load). Payload: TransferId (int) + TargetId4 (string, empty = all).
+        /// Not epoch-gated.</summary>
+        SnapshotMark = 35,
+
+        /// <summary>King → followers, part of the 30 s safety net: the ids of every living actor
+        /// (count + longs). Followers drop actors the king doesn't have and ask for the ones they
+        /// are missing, so actor existence always converges.</summary>
+        ActorRoster = 36,
+
+        /// <summary>Follower → king: please (re)send these actors (count + longs). The king
+        /// answers with SpawnUnit messages; followers that already have them ignore those.</summary>
+        ActorRequest = 37,
     }
 }
 
@@ -176,6 +193,9 @@ namespace WorldboxMP.Shared.Protocol
         public const byte Culture = 3;
         public const byte Language = 4;
         public const byte City = 5;
+        public const byte Clan = 6;
+        public const byte Family = 7;
+        public const byte Army = 8;
     }
 
     /// <summary>Sub-kinds for <see cref="MirrorKind.KingdomProp"/>.</summary>

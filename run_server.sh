@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-# Runs the WorldBox Multiplayer server on 0.0.0.0:9191 (the public endpoint the
-# Release client defaults to: old-server.example.invalid:9191).
-#
-# The listen socket already binds ANY ip (0.0.0.0); this script pins the PORT via
-# the WBMP_PORT env override. The Mongo connection string comes from
-# src/Server/appsettings.json (or override with WBMP_MONGO before running).
+# Build and run the WorldBox Multiplayer server from a checkout (Linux, macOS, Git Bash).
+# Settings come from src/Server/appsettings.json, a .env file next to the binary or in
+# the current directory, and env vars (env wins). See deploy/server.env.example.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export WBMP_PORT=9191
-# Run on whatever modern .NET runtime the box has, even if newer than net8.0.
-export DOTNET_ROLL_FORWARD=LatestMajor
+# No .NET telemetry.
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 
 dotnet build src/Server/WorldboxMP.Server.csproj -c Release -v m
-exec dotnet src/Server/bin/Release/net8.0/WorldboxMP.Server.dll
+exec dotnet src/Server/bin/Release/net10.0/WorldboxMP.Server.dll

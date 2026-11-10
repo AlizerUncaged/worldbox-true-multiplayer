@@ -22,7 +22,7 @@ namespace WorldboxMP.Server.Rooms
 
     /// <summary>
     /// A live game room. Holds its members, hierarchy, and password/visibility.
-    /// Rooms are in-memory (not persisted); only player accounts live in Mongo.
+    /// Rooms are in-memory (not persisted); only player accounts live in the database.
     /// All access happens on the single network poll thread, so no locking.
     /// </summary>
     public class Room
@@ -38,17 +38,35 @@ namespace WorldboxMP.Server.Rooms
         /// <summary>id4 of the king (creator). May be null for the persistent room 0 until claimed.</summary>
         public string KingId4 { get; set; }
 
-        /// <summary>Room 0 is permanent and is never auto-removed when empty.</summary>
+        /// <summary>Server lobbies (0000, 0001, ...) are permanent: never auto-removed when empty.</summary>
         public bool IsPermanent { get; }
+
+        /// <summary>Member cap; 0 = unlimited.</summary>
+        public int MaxPlayers { get; }
+        public bool IsFull => MaxPlayers > 0 && _members.Count >= MaxPlayers;
 
         private readonly Dictionary<string, Member> _members = new();
 
-        public Room(string shareableId, string name, bool permanent = false)
+        // Per-room activity log (what the in-game log viewer shows). Never contains
+        // addresses or anything from other rooms.
+        private readonly LinkedList<LogEntry> _log = new();
+        private const int MaxLog = 300;
+
+        public Room(string shareableId, string name, int maxPlayers, bool permanent = false)
         {
             ShareableId = shareableId;
             Name = name;
+            MaxPlayers = maxPlayers;
             IsPermanent = permanent;
         }
+
+        public void AddLog(LogEntry entry)
+        {
+            _log.AddLast(entry);
+            while (_log.Count > MaxLog) _log.RemoveFirst();
+        }
+
+        public IEnumerable<LogEntry> Log => _log;
 
         public IReadOnlyCollection<Member> Members => _members.Values;
         public int Count => _members.Count;
@@ -95,6 +113,9 @@ namespace WorldboxMP.Server.Rooms
             Name = Name,
             PlayerCount = Count,
             HasPassword = HasPassword,
+            MaxPlayers = MaxPlayers,
+            KingName = GetKing()?.Username ?? "",
+            IsLobby = IsPermanent,
         };
 
         /// <summary>Send a packet to every member of the room.</summary>

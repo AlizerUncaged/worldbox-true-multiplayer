@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Threading;
 using LiteNetLib;
 using LiteNetLib.Utils;
 using Pastel;
@@ -14,9 +16,12 @@ namespace WorldboxMP.Server.Net
     /// <summary>
     /// The LiteNetLib game server: accepts connections, routes packets, and owns
     /// the auth + room subsystems. Everything runs on a single thread driven by
-    /// <see cref="PollEvents"/> from <c>Program</c>, so no locking is needed.
+    /// <see cref="PollEvents"/> from <c>Program</c>, so no locking is needed - with one
+    /// exception: account work (PBKDF2 + database) runs on a dedicated auth worker
+    /// thread, and its results are posted back to the poll thread. A burst of logins
+    /// therefore never stalls live game traffic for everyone else.
     /// </summary>
-    public class GameServer
+    public partial class GameServer
     {
         private readonly int _port;
         private readonly EventBasedNetListener _listener = new();
@@ -27,20 +32,25 @@ namespace WorldboxMP.Server.Net
         private readonly AuthService _auth;
         private readonly RoomManager _rooms;
 
-        private readonly LinkedList<LogEntry> _log = new();
-        private const int MaxLog = 500;
+        // Auth worker: one thread owns the database; results come back via _mainQueue.
+        private readonly BlockingCollection<Action> _authJobs = new();
+        private readonly ConcurrentQueue<Action> _mainQueue = new();
+        private Thread _authThread;
 
-        public GameServer(IPlayerStore db, int port)
+
+        public GameServer(IPlayerStore db, int port, RoomSettings roomSettings)
         {
             _port = port;
+            _db = db;
             _auth = new AuthService(db);
+            LoadBans();
             _net = new NetManager(_listener)
             {
                 AutoRecycle = true,        // recycle readers after each receive event
                 UpdateTime = 15,
                 ChannelsCount = NetProtocol.ChannelCount,   // ch1 = snapshot chunks
             };
-            _rooms = new RoomManager(_proc, Log);
+            _rooms = new RoomManager(_proc, Log, roomSettings);
             WireEvents();
             WirePackets();
         }
@@ -49,13 +59,31 @@ namespace WorldboxMP.Server.Net
         {
             if (!_net.Start(_port))
                 throw new InvalidOperationException($"Failed to bind UDP port {_port}.");
+            _authThread = new Thread(() =>
+            {
+                foreach (var job in _authJobs.GetConsumingEnumerable())
+                {
+                    try { job(); }
+                    catch (Exception e) { Console.WriteLine("auth worker error: " + e); }
+                }
+            }) { IsBackground = true, Name = "wbmp-auth" };
+            _authThread.Start();
             Log($"Server listening on 0.0.0.0:{_port} (key '{NetProtocol.ConnectKey}').");
         }
 
-        public void PollEvents() => _net.PollEvents();
+        public void PollEvents()
+        {
+            _net.PollEvents();
+            while (_mainQueue.TryDequeue(out var a))
+            {
+                try { a(); }
+                catch (Exception e) { Log("auth completion error: " + e.Message); }
+            }
+        }
 
         public void Stop()
         {
+            _authJobs.CompleteAdding();
             _net.Stop();
             Log("Server stopped.");
         }
@@ -64,11 +92,25 @@ namespace WorldboxMP.Server.Net
         private void WireEvents()
         {
             _listener.ConnectionRequestEvent += request =>
-                request.AcceptIfKey(NetProtocol.ConnectKey);
+            {
+                string key = request.Data.TryGetString(out var k) ? k : "";
+                if (key != NetProtocol.ConnectKey)
+                {
+                    // Tell the client WHY, so an outdated mod shows a real message instead
+                    // of retrying "Connecting..." forever.
+                    string theirs = key.Length > 0 && key.Length < 32 ? key : "an unknown version";
+                    request.Reject(Reason($"Version mismatch: this server speaks {NetProtocol.ConnectKey}, your mod speaks {theirs}. Update the mod."));
+                    return;
+                }
+                string ip = request.RemoteEndPoint.Address.ToString();
+                if (IsIpBanned(ip, out var banned)) { request.Reject(Reason(banned)); return; }
+                request.Accept();
+            };
 
             _listener.PeerConnectedEvent += peer =>
             {
                 _sessions[peer] = new Session(peer);
+                // Addresses go to the operator console only - never into room logs.
                 Log($"Peer connected: {peer.Address} (id {peer.Id}).");
             };
 
@@ -76,7 +118,7 @@ namespace WorldboxMP.Server.Net
             {
                 if (_sessions.TryGetValue(peer, out var session))
                 {
-                    _rooms.LeaveRoom(session);
+                    _rooms.LeaveRoom(session, notify: false);
                     _sessions.Remove(peer);
                     LogC($"Peer disconnected: {session.Username} ({info.Reason}).",
                          $"{Dim("disconnect")} {Usr(string.IsNullOrEmpty(session.Username) ? "(anon)" : session.Username)} {Dim("(" + info.Reason + ")")}");
@@ -94,6 +136,8 @@ namespace WorldboxMP.Server.Net
         {
             _proc.SubscribeNetSerializable<RegisterRequest, NetPeer>(OnRegister);
             _proc.SubscribeNetSerializable<LoginRequest, NetPeer>(OnLogin);
+            _proc.SubscribeNetSerializable<TokenLoginRequest, NetPeer>(OnTokenLogin);
+            _proc.SubscribeNetSerializable<LogoutRequest, NetPeer>(OnLogout);
             _proc.SubscribeNetSerializable<CreateRoomRequest, NetPeer>(OnCreateRoom);
             _proc.SubscribeNetSerializable<JoinRoomRequest, NetPeer>(OnJoinRoom);
             _proc.SubscribeNetSerializable<LeaveRoomRequest, NetPeer>(OnLeaveRoom);
@@ -119,11 +163,18 @@ namespace WorldboxMP.Server.Net
             foreach (var peer in stale)
             {
                 var old = _sessions[peer];
-                _rooms.LeaveRoom(old);
+                _rooms.LeaveRoom(old, notify: false);
                 _sessions.Remove(peer);
-                try { peer.Disconnect(); } catch { }
+                try { _net.DisconnectPeer(peer, Reason(NetProtocol.SignedInElsewhere)); } catch { }
                 Log($"Replaced old session of {keep.Username}.");
             }
+        }
+
+        private static NetDataWriter Reason(string text)
+        {
+            var w = new NetDataWriter();
+            w.Put(text);
+            return w;
         }
 
         private bool RequireAuth(Session s)
@@ -133,31 +184,77 @@ namespace WorldboxMP.Server.Net
             return false;
         }
 
-        // ── Handlers ────────────────────────────────────────────────────────
+        // ── Auth (off-thread) ───────────────────────────────────────────────
         private void OnRegister(RegisterRequest req, NetPeer peer)
         {
-            var s = SessionOf(peer); if (s == null) return;
-            var res = _auth.Register(req.Username, req.Password);
-            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; DropOldSessions(s); LogC($"Registered: {s.Username} (id4 {s.Id4}).", $"{Ok("registered")} {Usr(s.Username)} {Dim("id4 " + s.Id4)}"); }
-            peer.Send(_proc, MakeAuth(res));
+            var s = SessionOf(peer); if (s == null || s.AuthPending) return;
+            RunAuth(peer, s, () => _auth.Register(req.Username, req.Password, remember: true), viaToken: false, register: true);
         }
 
         private void OnLogin(LoginRequest req, NetPeer peer)
         {
-            var s = SessionOf(peer); if (s == null) return;
-            var res = _auth.Login(req.Username, req.Password);
-            if (res.Ok) { s.Id4 = res.Player.Id4; s.Username = res.Player.Username; DropOldSessions(s); LogC($"Login: {s.Username}.", $"{Ok("login")} {Usr(s.Username)}"); }
-            peer.Send(_proc, MakeAuth(res));
+            var s = SessionOf(peer); if (s == null || s.AuthPending) return;
+            RunAuth(peer, s, () => _auth.Login(req.Username, req.Password, req.Remember), viaToken: false, register: false);
         }
 
-        private AuthResponse MakeAuth(AuthResult res) => new AuthResponse
+        private void OnTokenLogin(TokenLoginRequest req, NetPeer peer)
         {
-            Ok = res.Ok,
-            Message = res.Message,
-            Id4 = res.Ok ? res.Player.Id4 : "",
-            Username = res.Ok ? res.Player.Username : "",
-        };
+            var s = SessionOf(peer); if (s == null || s.AuthPending) return;
+            RunAuth(peer, s, () => _auth.TokenLogin(req.Token), viaToken: true, register: false);
+        }
 
+        private void OnLogout(LogoutRequest req, NetPeer peer)
+        {
+            var s = SessionOf(peer); if (s == null) return;
+            string token = req.Token;
+            _authJobs.Add(() => _auth.Logout(token));
+            if (s.IsAuthenticated) Log($"Logout: {s.Username}.");
+            _rooms.LeaveRoom(s, notify: true);
+            s.Id4 = ""; s.Username = "";
+        }
+
+        /// <summary>Run one account operation on the auth worker; finish on the poll thread.</summary>
+        private void RunAuth(NetPeer peer, Session s, Func<AuthResult> work, bool viaToken, bool register)
+        {
+            s.AuthPending = true;
+            _authJobs.Add(() =>
+            {
+                AuthResult res;
+                try { res = work(); }
+                catch (Exception e) { Console.WriteLine("auth error: " + e.Message); res = AuthResult.Fail("Server error - try again."); }
+                _mainQueue.Enqueue(() => FinishAuth(peer, s, res, viaToken, register));
+            });
+        }
+
+        private void FinishAuth(NetPeer peer, Session s, AuthResult res, bool viaToken, bool register)
+        {
+            s.AuthPending = false;
+            if (!_sessions.TryGetValue(peer, out var current) || current != s) return;   // gone meanwhile
+            if (res.Ok && IsAccountBanned(res.Player.Id4, out var banned))
+            {
+                peer.Send(_proc, new AuthResponse { Ok = false, Message = banned, ViaToken = viaToken });
+                return;
+            }
+            if (res.Ok)
+            {
+                if (s.IsAuthenticated && s.Id4 != res.Player.Id4) _rooms.LeaveRoom(s, notify: true);   // switched account
+                s.Id4 = res.Player.Id4; s.Username = res.Player.Username;
+                DropOldSessions(s);
+                string what = register ? "registered" : viaToken ? "resumed" : "login";
+                LogC($"{what}: {s.Username}.", $"{Ok(what)} {Usr(s.Username)}");
+            }
+            peer.Send(_proc, new AuthResponse
+            {
+                Ok = res.Ok,
+                Message = res.Ok && register ? "Account created - welcome!" : res.Message,
+                Id4 = res.Ok ? res.Player.Id4 : "",
+                Username = res.Ok ? res.Player.Username : "",
+                Token = res.Ok ? res.Token : "",
+                ViaToken = viaToken,
+            });
+        }
+
+        // ── Rooms ───────────────────────────────────────────────────────────
         private void OnCreateRoom(CreateRoomRequest req, NetPeer peer)
         {
             var s = SessionOf(peer); if (!RequireAuth(s)) return;
@@ -188,7 +285,7 @@ namespace WorldboxMP.Server.Net
         private void OnLeaveRoom(LeaveRoomRequest req, NetPeer peer)
         {
             var s = SessionOf(peer); if (s == null) return;
-            _rooms.LeaveRoom(s);
+            _rooms.LeaveRoom(s, notify: true);
         }
 
         private void OnRoomList(RoomListRequest req, NetPeer peer)
@@ -212,11 +309,13 @@ namespace WorldboxMP.Server.Net
             s.CurrentRoom.BroadcastExcept(_proc, s.Id4, req, DeliveryMethod.Sequenced);
         }
 
+        /// <summary>The caller's own room log only - never other rooms, never addresses.</summary>
         private void OnLogList(LogListRequest req, NetPeer peer)
         {
             var s = SessionOf(peer); if (!RequireAuth(s)) return;
             var resp = new LogListResponse();
-            foreach (var e in _log) resp.Entries.Add(e);
+            if (s.CurrentRoom != null)
+                foreach (var e in s.CurrentRoom.Log) resp.Entries.Add(e);
             peer.Send(_proc, resp);
         }
 
@@ -252,58 +351,58 @@ namespace WorldboxMP.Server.Net
             {
                 case MirrorKind.GodPower:
                     var gp = MirrorCodec.ReadGodPower(msg.Payload);
-                    LogC($"[{room}] {s.Username} used power '{gp.PowerId}' at ({gp.X},{gp.Y})",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} used power '{gp.PowerId}' at ({gp.X},{gp.Y})",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("used power")} {Val(gp.PowerId)} {Dim($"at ({gp.X},{gp.Y})")}");
                     break;
                 case MirrorKind.SpawnUnit:
                     var sp = MirrorCodec.ReadSpawn(msg.Payload);
-                    LogC($"[{room}] {s.Username} spawned creature (sub {sp.SubId}, {sp.ActorJson.Length}B)",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} spawned creature (sub {sp.SubId}, {sp.ActorJson.Length}B)",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("spawned")} {Val("creature")} {Dim($"sub {sp.SubId} · {sp.ActorJson.Length}B")}");
                     break;
                 case MirrorKind.Terrain:
                     var tr = MirrorCodec.ReadTerrain(msg.Payload);
-                    LogC($"[{room}] {s.Username} terrain '{tr.TileId}' at ({tr.X},{tr.Y})",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} terrain '{tr.TileId}' at ({tr.X},{tr.Y})",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("terrain")} {Val(tr.TileId)} {Dim($"at ({tr.X},{tr.Y})")}");
                     break;
                 case MirrorKind.Death:
                     var dm = MirrorCodec.ReadDeath(msg.Payload);
-                    LogC($"[{room}] {s.Username} unit #{dm.KingId} died",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} unit #{dm.KingId} died",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("death")} {Dim("#" + dm.KingId)}");
                     break;
                 case MirrorKind.Fire:
                     var fm = MirrorCodec.ReadFire(msg.Payload);
-                    LogC($"[{room}] {s.Username} fire {(fm.On ? "+" : "-")} ({fm.X},{fm.Y})",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} fire {(fm.On ? "+" : "-")} ({fm.X},{fm.Y})",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("fire")} {Val(fm.On ? "+" : "-")} {Dim($"({fm.X},{fm.Y})")}");
                     break;
                 case MirrorKind.Trait:
                     var tt = MirrorCodec.ReadTrait(msg.Payload);
-                    LogC($"[{room}] {s.Username} trait {(tt.Add ? "+" : "-")}{tt.TraitId} #{tt.KingId}",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} trait {(tt.Add ? "+" : "-")}{tt.TraitId} #{tt.KingId}",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("trait")} {Val((tt.Add ? "+" : "-") + tt.TraitId)} {Dim("#" + tt.KingId)}");
                     break;
                 case MirrorKind.Object:
                     var om = MirrorCodec.ReadObject(msg.Payload);
-                    LogC($"[{room}] {s.Username} structural kind={om.Kind} ({om.Json.Length}B)",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} structural kind={om.Kind} ({om.Json.Length}B)",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("object")} {Val("kind " + om.Kind)} {Dim(om.Json.Length + "B")}");
                     break;
                 case MirrorKind.Equip:
                     var em = MirrorCodec.ReadEquip(msg.Payload);
-                    LogC($"[{room}] {s.Username} equip #{em.ActorId}",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} equip #{em.ActorId}",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("equip")} {Dim("#" + em.ActorId)}");
                     break;
                 case MirrorKind.Rename:
                     var rn = MirrorCodec.ReadRename(msg.Payload);
-                    LogC($"[{room}] {s.Username} rename #{rn.Id} -> {rn.Name}",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} rename #{rn.Id} -> {rn.Name}",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("rename")} {Dim("#" + rn.Id)} {Val(rn.Name)}");
                     break;
                 case MirrorKind.Time:
                     var tm = MirrorCodec.ReadTime(msg.Payload);
-                    LogC($"[{room}] {s.Username} year-sync t={tm.WorldTime:F0}",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} year-sync t={tm.WorldTime:F0}",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("time")} {Dim("t=" + tm.WorldTime.ToString("F0"))}");
                     break;
                 // Health/Status are high-frequency → not logged.
                 case MirrorKind.SimControl:
                     var sc = MirrorCodec.ReadSimControl(msg.Payload);
-                    LogC($"[{room}] {s.Username} sim paused={sc.Paused} speed={sc.SpeedId}",
+                    RoomLogC(s.CurrentRoom, $"[{room}] {s.Username} sim paused={sc.Paused} speed={sc.SpeedId}",
                          $"{Dim("[" + room + "]")} {Usr(s.Username)} {Act("sim")} paused={Val(sc.Paused.ToString())} speed={Val(sc.SpeedId)}");
                     break;
                 // EntityState: intentionally not logged (high frequency).
@@ -338,7 +437,7 @@ namespace WorldboxMP.Server.Net
             {
                 s.CurrentRoom.BroadcastExcept(_proc, s.Id4, chunk, NetProtocol.SnapshotChannel, DeliveryMethod.ReliableOrdered);
                 if (chunk.Index == 0 || chunk.Index == chunk.Count - 1)
-                    LogC($"[{s.CurrentRoom.ShareableId}] {s.Username} resync chunk {chunk.Index + 1}/{chunk.Count} ({chunk.TotalBytes} bytes total) → all",
+                    RoomLogC(s.CurrentRoom, $"[{s.CurrentRoom.ShareableId}] {s.Username} resync chunk {chunk.Index + 1}/{chunk.Count} ({chunk.TotalBytes} bytes total) → all",
                          $"{Dim("[" + s.CurrentRoom.ShareableId + "]")} {Usr(s.Username)} {Act("resync")} {Dim($"chunk {chunk.Index + 1}/{chunk.Count} → all")}");
                 return;
             }
@@ -365,7 +464,7 @@ namespace WorldboxMP.Server.Net
             var king = room.GetKing();
             if (king == null) return;
             king.Session.Peer.Send(_proc, new SnapshotRequest { ForId4 = s.Id4 });
-            LogC($"[{room.ShareableId}] {s.Username} requested world resync",
+            RoomLogC(room, $"[{room.ShareableId}] {s.Username} requested world resync",
                  $"{Dim("[" + room.ShareableId + "]")} {Usr(s.Username)} {Act("requested resync")}");
         }
 
@@ -378,18 +477,20 @@ namespace WorldboxMP.Server.Net
         internal static string Ok(string s) => s.Pastel(Color.LightGreen);
         internal static string Bad(string s) => s.Pastel(Color.IndianRed);
 
-        /// <summary>Log plain text (console shows it uncolored).</summary>
-        private void Log(string text) => Emit(text, text);
+        /// <summary>Operator console only (plain).</summary>
+        private void Log(string text) => Emit(text);
 
-        /// <summary>Log with a separate colored console rendering (clients still get the plain text).</summary>
-        private void LogC(string plain, string colored) => Emit(plain, colored);
+        /// <summary>Operator console only (colored).</summary>
+        private void LogC(string plain, string colored) => Emit(colored);
 
-        private void Emit(string plain, string colored)
+        /// <summary>Console AND the room's own log (what its players can read in-game).</summary>
+        private void RoomLogC(Room room, string plain, string colored)
         {
-            var entry = new LogEntry { UnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Text = plain };
-            _log.AddLast(entry);
-            while (_log.Count > MaxLog) _log.RemoveFirst();
-            Console.WriteLine($"{$"[{DateTime.Now:HH:mm:ss}]".Pastel(Color.DimGray)} {colored}");
+            room?.AddLog(new LogEntry { UnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Text = plain });
+            Emit(colored);
         }
+
+        private static void Emit(string colored) =>
+            Console.WriteLine($"{$"[{DateTime.Now:HH:mm:ss}]".Pastel(Color.DimGray)} {colored}");
     }
 }
