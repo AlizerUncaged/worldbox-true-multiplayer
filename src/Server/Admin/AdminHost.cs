@@ -15,7 +15,7 @@ using WorldboxMP.Server.Net;
 
 namespace WorldboxMP.Server.Admin
 {
-    /// <summary>Admin panel settings (env / .env): WBMP_ADMIN_*.</summary>
+    /// <summary>Admin panel settings (the "Admin" section of the server settings).</summary>
     public class AdminOptions
     {
         public bool Enabled { get; set; }
@@ -24,28 +24,12 @@ namespace WorldboxMP.Server.Admin
         public string User { get; set; } = "admin";
         public string Password { get; set; } = "";
         public bool ResetPassword { get; set; }
-
-        public static AdminOptions FromEnv()
-        {
-            static string E(string k) => Environment.GetEnvironmentVariable(k);
-            static bool B(string v) => v != null && (v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1" || v.Equals("yes", StringComparison.OrdinalIgnoreCase));
-            var o = new AdminOptions
-            {
-                Enabled = B(E("WBMP_ADMIN_ENABLED")),
-                Password = E("WBMP_ADMIN_PASSWORD") ?? "",
-                ResetPassword = B(E("WBMP_ADMIN_PASSWORD_RESET")),
-            };
-            if (!string.IsNullOrWhiteSpace(E("WBMP_ADMIN_BIND"))) o.Bind = E("WBMP_ADMIN_BIND").Trim();
-            if (int.TryParse(E("WBMP_ADMIN_PORT"), out var p) && p > 0 && p < 65536) o.Port = p;
-            if (!string.IsNullOrWhiteSpace(E("WBMP_ADMIN_USER"))) o.User = E("WBMP_ADMIN_USER").Trim();
-            return o;
-        }
     }
 
     /// <summary>
     /// The server management website: a single page (Tailwind, embedded in the dll) plus a
     /// small JSON api under /api. Separate port from the game so it can stay firewalled.
-    /// Logins are admin accounts (not game accounts), seeded from WBMP_ADMIN_PASSWORD.
+    /// Logins are admin accounts (not game accounts), seeded from Admin:Password.
     /// No lockouts or rate limits by design; use a strong password and keep it off public ports.
     /// </summary>
     public static class AdminHost
@@ -64,20 +48,20 @@ namespace WorldboxMP.Server.Admin
             if (string.IsNullOrEmpty(o.Password) || o.Password.Length < 8)
             {
                 Console.WriteLine(exists
-                    ? "WARN: WBMP_ADMIN_PASSWORD_RESET is set but WBMP_ADMIN_PASSWORD is missing or shorter than 8 characters - password unchanged."
-                    : "WARN: admin panel disabled - set WBMP_ADMIN_PASSWORD (8+ characters) to create the first admin.");
+                    ? "WARN: Admin:ResetPassword is set but Admin:Password is missing or shorter than 8 characters - password unchanged."
+                    : "WARN: admin panel disabled - set Admin:Password (8+ characters, e.g. in appsettings.Local.json) to create the first admin.");
                 return exists;
             }
             var (hash, salt) = AuthService.HashPassword(o.Password);
             db.SaveAdmin(new AdminRecord { Username = o.User, UsernameLower = lower, PasswordHash = hash, PasswordSalt = salt });
-            Console.WriteLine(exists ? $"Admin '{o.User}': password reset from WBMP_ADMIN_PASSWORD." : $"Admin '{o.User}' created from WBMP_ADMIN_PASSWORD.");
+            Console.WriteLine(exists ? $"Admin '{o.User}': password reset from Admin:Password." : $"Admin '{o.User}' created from Admin:Password.");
             return true;
         }
 
-        public static WebApplication Start(GameServer server, AdminOptions o)
+        public static WebApplication Start(GameServer server, AdminOptions o, ServerSettings.HttpsSettings httpsSettings)
         {
-            string pfx = Environment.GetEnvironmentVariable("WBMP_CERT_PFX");
-            string pass = Environment.GetEnvironmentVariable("WBMP_CERT_PASS");
+            string pfx = httpsSettings?.CertificatePath;
+            string pass = httpsSettings?.CertificatePassword;
             bool https = !string.IsNullOrEmpty(pfx);
 
             var builder = WebApplication.CreateBuilder();
@@ -187,7 +171,7 @@ namespace WorldboxMP.Server.Admin
             app.RunAsync();
             Console.WriteLine($"Admin panel on {(https ? "https" : "http")}://{o.Bind}:{o.Port}/");
             if (!https && o.Bind != "127.0.0.1" && o.Bind != "localhost")
-                Console.WriteLine("WARN: the admin panel is plain HTTP on a public address. Put it behind TLS (WBMP_CERT_PFX or a reverse proxy) or bind 127.0.0.1 and use an SSH tunnel.");
+                Console.WriteLine("WARN: the admin panel is plain HTTP on a public address. Put it behind TLS (Https:CertificatePath or a reverse proxy) or bind 127.0.0.1 and use an SSH tunnel.");
             return app;
         }
 

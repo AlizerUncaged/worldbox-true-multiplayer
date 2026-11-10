@@ -281,7 +281,7 @@ namespace WorldboxMP.Client.Mirror
             _rxTransferId = -1; _rxSnapshot = null;
             _awaitTransferId = -1; _postSnapshotBuffer.Clear();
             _sentObjHash.Clear(); _sentOvergrowth.Clear(); _sentStatsHash.Clear(); _sentActorJson.Clear(); _lastFullAt.Clear(); _sentVitals.Clear(); _dirtyObjects.Clear(); _freshActors.Clear(); _pendingSpawns.Clear(); _lastWorldAgeHash = 0;
-            _snapshotLoading = false; _loadingTransferId = -1;
+            _snapshotLoading = false; _loadingTransferId = -1; _deferredSnapshot = null;
             _worldChangePending = false;
             RemoteMagnet.Clear();
             UI.PingHud.ClearTransfer();
@@ -823,9 +823,46 @@ namespace WorldboxMP.Client.Mirror
         private byte _loadingEpoch;
         private int _loadingTransferId = -1;
 
+        private byte[] _deferredSnapshot;
+        private float _noWorldTimer;
+        private float _loadStartedAt;
+        private const float SnapshotLoadTimeout = 120f;
+
+        /// <summary>The local game can take a world load right now: it has finished booting
+        /// (a world was built at least once) and its loader is idle.</summary>
+        private static bool LocalWorldReady
+        {
+            get
+            {
+                bool loading = true;
+                try { loading = SmoothLoader.isLoading(); } catch { loading = false; }
+                bool booted = true;
+                try { booted = Config.game_loaded; } catch { }
+                return booted && GameHooks.WorldBuiltOnce && !loading;
+            }
+        }
+
         private void PumpSnapshotLoad()
         {
             if (!_snapshotLoading) return;
+            if (UnityEngine.Time.unscaledTime - _loadStartedAt > SnapshotLoadTimeout)
+            {
+                // Never leave a follower stuck "loading" (it would drop every live message and
+                // the owner would drop its intents): start over with a fresh snapshot.
+                ModLog.Warn("[sync] world load did not finish; requesting a fresh snapshot");
+                _snapshotLoading = false; _deferredSnapshot = null; _awaitTransferId = -1; _postSnapshotBuffer.Clear();
+                NetClient.Instance?.RequestResync();
+                return;
+            }
+            if (_deferredSnapshot != null)
+            {
+                if (!LocalWorldReady) return;   // still booting: try again next frame
+                var data = _deferredSnapshot;
+                _deferredSnapshot = null;
+                ModLog.Info($"Loading world snapshot ({data.Length} bytes, epoch {_loadingEpoch})...");
+                WorldSync.Load(data);
+                return;   // the load runs over the next frames
+            }
             bool stillLoading = true;
             try { stillLoading = SmoothLoader.isLoading(); } catch { stillLoading = false; }
             if (stillLoading) return;
@@ -999,12 +1036,13 @@ namespace WorldboxMP.Client.Mirror
                     if (IsFollower) ApplyWeather(MirrorCodec.ReadWeather(msg.Payload));
                     break;
                 case MirrorKind.Plugin:
-                    // Third-party channel (WbmpApi). King-authoritative routing like GodPower:
-                    // a follower's message reaches the king only; the king relays it onward so
-                    // every client sees it, then both sides hand it to the registered handler.
+                    // Third-party channel (WbmpApi). Owner-authoritative routing: the server
+                    // delivers a follower's message to the owner ONLY (an intent: the plugin
+                    // validates it and Sends the result), and the owner's messages to every
+                    // follower. No automatic relay: that used to re-broadcast raw follower
+                    // requests to everyone flagged as if the owner had sent them.
                     var pm = MirrorCodec.ReadPlugin(msg.Payload);
-                    if (IsKing) Send(MirrorKind.Plugin, msg.Payload);
-                    Api.WbmpApi.DispatchInternal(pm, !IsKing);   // we RECEIVE from the king iff we are not the king
+                    Api.WbmpApi.DispatchInternal(pm, !IsKing);   // a non-owner only ever receives from the owner
                     break;
                 case MirrorKind.SimControl:
                     ApplySimControl(MirrorCodec.ReadSimControl(msg.Payload));
@@ -1361,12 +1399,59 @@ namespace WorldboxMP.Client.Mirror
         /// family/army/city must match the ids in its own data (spawn snapshots and membership
         /// messages write those ids even when the target wasn't there yet).</summary>
         private float _relinkTimer;
+        // ── Dangling links ─────────────────────────────────────────────────
+        // An actor can keep pointing at a meta object (family, clan, army...) that was removed:
+        // the object survives but its data is wiped, and the game's save code (getID) then
+        // throws - which made a promoted follower unable to save, so nobody got a world.
+        private static readonly string[] _actorLinkFields = { "family", "clan", "army", "culture", "religion", "language", "city", "kingdom" };
+        private static FieldInfo[] _actorLinkInfos;
+        private static readonly Dictionary<Type, FieldInfo> _objDataField = new Dictionary<Type, FieldInfo>();
+
+        private static bool IsDead(object meta)
+        {
+            if (meta == null) return false;
+            var t = meta.GetType();
+            if (!_objDataField.TryGetValue(t, out var f)) _objDataField[t] = f = AccessTools.Field(t, "data");
+            return f != null && f.GetValue(meta) == null;
+        }
+
+        /// <summary>Clear every actor link to a removed meta object. Returns how many were cleared.</summary>
+        internal int ClearDanglingLinks()
+        {
+            var units = World.world?.units?.getSimpleList();
+            if (units == null) return 0;
+            if (_actorLinkInfos == null)
+            {
+                var list = new List<FieldInfo>();
+                foreach (var n in _actorLinkFields) { var fi = AccessTools.Field(typeof(Actor), n); if (fi != null) list.Add(fi); }
+                _actorLinkInfos = list.ToArray();
+            }
+            int cleared = 0;
+            foreach (var a in units)
+            {
+                if (a == null) continue;
+                foreach (var fi in _actorLinkInfos)
+                {
+                    try
+                    {
+                        var v = fi.GetValue(a);
+                        if (v != null && IsDead(v)) { fi.SetValue(a, null); cleared++; }
+                    }
+                    catch { }
+                }
+            }
+            if (cleared > 0 && _danglingLog < 10) { _danglingLog++; ModLog.Info($"[sync] cleared {cleared} link(s) to removed objects"); }
+            return cleared;
+        }
+        private int _danglingLog;
+
         private void RelinkActorsFromData(float dt)
         {
             _relinkTimer += dt;
             if (_relinkTimer < 1f) return;
             _relinkTimer = 0f;
             RetryPendingMembers();
+            ClearDanglingLinks();
             var w = World.world; var units = w?.units?.getSimpleList();
             if (units == null) return;
             _applyingMember = true;
@@ -1874,6 +1959,18 @@ namespace WorldboxMP.Client.Mirror
         {
             if (Active && IsFollower)
             {
+                // In a room but no world yet and nothing arriving: ask the owner again.
+                if (_appliedEpoch == 0 && !_snapshotLoading && _rxSnapshot == null)
+                {
+                    _noWorldTimer += dt;
+                    if (_noWorldTimer >= 15f)
+                    {
+                        _noWorldTimer = 0f;
+                        ModLog.Warn("[sync] still no world from the owner; requesting a snapshot");
+                        NetClient.Instance?.RequestResync();
+                    }
+                }
+                else _noWorldTimer = 0f;
                 try { PumpSnapshotLoad(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("PumpSnapshotLoad: " + e.Message); } }
                 if (_snapshotLoading) return;
                 try { RelinkActorsFromData(dt); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("RelinkActorsFromData: " + e.Message); } }
@@ -2371,8 +2468,9 @@ namespace WorldboxMP.Client.Mirror
         private void StartSnapshotTransfer(string targetId4)
         {
             if (!Active || !IsKing) return;
+            ClearDanglingLinks();   // a dangling link makes the game's save throw
             var data = WorldSync.Save();
-            if (data.Length == 0) return;
+            if (data.Length == 0) { ModLog.Warn("[sync] snapshot not sent: the world could not be saved (see error above)"); return; }
             // A newer transfer to the same audience supersedes an unfinished one.
             _outgoingSnapshots.RemoveAll(t => t.TargetId4 == targetId4);
             int count = (data.Length + NetProtocol.SnapshotChunkSize - 1) / NetProtocol.SnapshotChunkSize;
@@ -2462,11 +2560,13 @@ namespace WorldboxMP.Client.Mirror
             var data = _rxSnapshot;
             int loadedId = _rxTransferId;
             _rxSnapshot = null; _rxTransferId = -1;
-            // Hold live traffic from here until the (multi-frame) load has finished.
+            // Hold live traffic from here until the (multi-frame) load has finished. If this
+            // game is still booting, park the snapshot and load it once the local world is up.
             _snapshotLoading = true; _loadingEpoch = _rxEpoch; _loadingTransferId = loadedId;
-            WorldSync.Load(data);
-            ModLog.Info($"World snapshot received ({data.Length} bytes, epoch {_rxEpoch}); loading...");
-            PumpSnapshotLoad();   // tiny worlds may already be done
+            _loadStartedAt = UnityEngine.Time.unscaledTime;
+            _deferredSnapshot = data;
+            ModLog.Info($"World snapshot received ({data.Length} bytes, epoch {_rxEpoch}).");
+            PumpSnapshotLoad();
         }
 
         /// <summary>Hook (MapBox.clearWorld postfix): the local player loaded/generated a

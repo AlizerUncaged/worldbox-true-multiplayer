@@ -153,6 +153,16 @@ namespace WorldboxMP.Client.Dev
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "cursors": return WorldboxMP.Client.UI.PlayerCursors.Instance?.DebugJson() ?? "{\"error\":\"no cursors\"}";
                 case "meta": return Meta();
+                case "plugin":
+                    // SDK test: register the dev channel once, then send on it.
+                    if (!_pluginReg)
+                    {
+                        _pluginReg = true;
+                        WorldboxMP.Client.Api.WbmpApi.RegisterChannel("wbmp.devtest", (data, fromKing) =>
+                        { lock (_pluginLog) _pluginLog.Add(System.Text.Encoding.UTF8.GetString(data) + (fromKing ? "|fromOwner" : "|fromFollower")); });
+                    }
+                    if (Get(q, "msg", "") != "") WorldboxMP.Client.Api.WbmpApi.Send("wbmp.devtest", System.Text.Encoding.UTF8.GetBytes(Get(q, "msg", "")));
+                    lock (_pluginLog) return "[\"" + string.Join("\",\"", _pluginLog.Select(Esc)) + "\"]";
                 case "actorjson":
                     try
                     {
@@ -500,6 +510,9 @@ namespace WorldboxMP.Client.Dev
 
         /// <summary>Meta-object linkage for king/follower comparison: each city/kingdom's live
         /// culture/religion/language refs vs the ids in its data, plus every culture/religion/language/clan.</summary>
+        private static bool _pluginReg;
+        private static readonly List<string> _pluginLog = new List<string>();
+
         private static string Meta()
         {
             var sb = new StringBuilder("{");

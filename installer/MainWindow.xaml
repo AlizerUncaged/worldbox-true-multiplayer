@@ -1,0 +1,52 @@
+<Window x:Class="WorldboxMP.Installer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WorldBox Multiplayer Installer" Width="560" SizeToContent="Height"
+        ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource Page}" FontFamily="Segoe UI" Foreground="White">
+    <StackPanel Margin="28,24,28,26">
+        <StackPanel Orientation="Horizontal">
+            <Image Source="logo.png" Width="56" Height="56" RenderOptions.BitmapScalingMode="NearestNeighbor" />
+            <StackPanel Margin="14,4,0,0">
+                <TextBlock Text="WorldBox Multiplayer" FontSize="22" FontWeight="Bold" />
+                <TextBlock Text="Installs NeoModLoader and the multiplayer mod for you." Foreground="{StaticResource Muted}" FontSize="13" Margin="0,2,0,0" />
+            </StackPanel>
+        </StackPanel>
+
+        <Border Background="{StaticResource Card}" CornerRadius="16" Padding="18" Margin="0,22,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1">
+            <StackPanel>
+                <TextBlock Text="WorldBox folder" Foreground="{StaticResource Muted}" FontSize="12" FontWeight="SemiBold" />
+                <DockPanel Margin="0,8,0,0">
+                    <Button x:Name="BrowseButton" DockPanel.Dock="Right" Style="{StaticResource Ghost}" Content="Browse..." Margin="8,0,0,0" Click="Browse_Click" />
+                    <Border Background="{StaticResource Page}" CornerRadius="10" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                        <TextBox x:Name="PathBox" Background="Transparent" BorderThickness="0" Foreground="White" CaretBrush="White"
+                                 FontSize="13" Padding="10,8" VerticalContentAlignment="Center" TextChanged="PathBox_TextChanged" />
+                    </Border>
+                </DockPanel>
+                <TextBlock x:Name="PathHint" Foreground="{StaticResource Muted}" FontSize="12" Margin="2,8,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Border Background="{StaticResource Card}" CornerRadius="16" Padding="18" Margin="0,12,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="Progress" Foreground="{StaticResource Muted}" FontSize="12" FontWeight="SemiBold" />
+                    <TextBlock x:Name="StepText" DockPanel.Dock="Right" HorizontalAlignment="Right" Foreground="{StaticResource Muted}" FontSize="12" />
+                </DockPanel>
+                <ProgressBar x:Name="Progress" Height="6" Margin="0,10,0,0" Minimum="0" Maximum="100" Background="{StaticResource Page}"
+                             Foreground="{StaticResource Brand}" BorderThickness="0" />
+                <TextBox x:Name="LogBox" Height="140" Margin="0,12,0,0" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                         Background="{StaticResource Page}" Foreground="#C9CDD4" BorderBrush="{StaticResource Line}" FontFamily="Consolas" FontSize="12" Padding="8" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock Foreground="{StaticResource Muted}" FontSize="12" Margin="2,14,0,0" TextWrapping="Wrap"
+                   Text="After installing, turn on Experimental Mode in WorldBox's settings and restart the game. The True Multiplayer tab appears in the toolbar (F9 opens it)." />
+
+        <DockPanel Margin="0,18,0,0" LastChildFill="False">
+            <Button x:Name="InstallButton" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Install" Click="Install_Click" />
+            <Button x:Name="LaunchButton" DockPanel.Dock="Right" Style="{StaticResource Ghost}" Content="Launch WorldBox" Margin="0,0,10,0"
+                    Visibility="Collapsed" Click="Launch_Click" />
+        </DockPanel>
+    </StackPanel>
+</Window>

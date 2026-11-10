@@ -6,8 +6,8 @@ namespace WorldboxMP.Server.Data
     /// <summary>
     /// The complete persistence surface of the server (accounts only, deliberately
     /// tiny). Two implementations: MongoDB for the official instance, SQLite for
-    /// zero-dependency self-hosting. Selected by "DatabaseBrand" in appsettings.json
-    /// (or WBMP_DATABASE_BRAND).
+    /// zero-dependency self-hosting. Selected by "Database:Provider" in appsettings.json
+    /// (or env WBMP_Database__Provider).
     /// </summary>
     public interface IPlayerStore
     {

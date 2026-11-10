@@ -1,0 +1,1 @@
+WorldBox Multiplayer is open source under the MIT License · [Source](https://github.com/AlizerUncaged/worldbox-multiplayer) · [Releases](https://github.com/AlizerUncaged/worldbox-multiplayer/releases) · Not affiliated with Maxim Karpenko or WorldBox.

@@ -13,9 +13,9 @@ Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 Environment=DOTNET_NOLOGO=1
 # Plain journal output (no ANSI colors).
 Environment=NO_COLOR=1
-# Per-instance settings (port, db path, advertised versions) live here so a
-# redeploy never overwrites them. See .env.example in the repository.
-EnvironmentFile=-/etc/worldbox-multiplayer.env
+# Per-instance settings and secrets live outside the install dir so a redeploy never
+# overwrites them (template: deploy/appsettings.server.json in the repository).
+Environment=WBMP_SETTINGS=/etc/worldbox-multiplayer/appsettings.json
 Restart=always
 RestartSec=3
 

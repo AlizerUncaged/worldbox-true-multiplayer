@@ -7,11 +7,12 @@ using WorldboxMP.Shared.Protocol;
 
 namespace WorldboxMP.Server.Rooms
 {
-    /// <summary>Room limits and the server's permanent lobbies (from appsettings / env).</summary>
+    /// <summary>Room limits and the server's permanent lobbies (the "Rooms" settings section).</summary>
     public class RoomSettings
     {
         /// <summary>Names of the always-open server lobbies, in order: 0000, 0001, ...</summary>
-        public List<string> Lobbies { get; set; } = new() { "Lobby" };
+        // Not pre-filled: the configuration binder APPENDS to an existing list. Empty -> "Lobby".
+        public List<string> Lobbies { get; set; } = new();
 
         /// <summary>Member cap for every room (lobbies and player rooms). 0 = unlimited.</summary>
         public int MaxPlayersPerRoom { get; set; } = 16;

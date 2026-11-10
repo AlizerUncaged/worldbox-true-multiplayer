@@ -10,22 +10,21 @@ namespace WorldboxMP.Server.Net
     /// <summary>
     /// Minimal REST api (/api/v1/**) on the SAME port number as the game: LiteNetLib
     /// owns the UDP side, Kestrel owns the TCP side - no conflict, no iptables.
-    /// HTTPS when a certificate is provided (WBMP_CERT_PFX [+ WBMP_CERT_PASS]),
+    /// HTTPS when a certificate is configured (Https:CertificatePath / CertificatePassword),
     /// plain HTTP otherwise (local/dev). The client hits /api/v1/version at startup.
     /// </summary>
     public static class ApiHost
     {
-        /// <summary>The version advertised to clients. Set from appsettings
-        /// ("LatestVersion") or env WBMP_LATEST_VERSION; empty = endpoint reports none.</summary>
+        /// <summary>The version advertised to clients (setting "LatestVersion"); empty = none.</summary>
         public static string LatestVersion = "";
 
         /// <summary>Oldest client version this server accepts (defaults to LatestVersion).</summary>
         public static string MinimumVersion = "";
 
-        public static WebApplication Start(int port)
+        public static WebApplication Start(int port, ServerSettings.HttpsSettings https)
         {
-            string pfx = Environment.GetEnvironmentVariable("WBMP_CERT_PFX");
-            string pass = Environment.GetEnvironmentVariable("WBMP_CERT_PASS");
+            string pfx = https?.CertificatePath;
+            string pass = https?.CertificatePassword;
 
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();   // keep the game server console clean

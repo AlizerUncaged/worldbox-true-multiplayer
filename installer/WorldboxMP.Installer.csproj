@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- One small exe that runs on any Windows 10/11 out of the box (.NET Framework 4.8 is
+       built in), so players need nothing else installed. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>WorldBoxMultiplayer-Installer</AssemblyName>
+    <RootNamespace>WorldboxMP.Installer</RootNamespace>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
+    <Product>WorldBox Multiplayer Installer</Product>
+    <Company>ALIZER</Company>
+    <Copyright>MIT License, (c) 2026 ALIZER</Copyright>
+    <Version>1.0.0</Version>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="logo.png" />
+  </ItemGroup>
+
+</Project>

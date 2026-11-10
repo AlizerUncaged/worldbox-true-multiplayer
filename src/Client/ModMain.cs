@@ -16,8 +16,21 @@ namespace WorldboxMP.Client
     {
         protected override void OnModLoad()
         {
+            // Dependencies live in <mod>/lib (see LibResolver). Install the resolver BEFORE
+            // anything that references LiteNetLib/Shared is compiled: Load() is a separate,
+            // never-inlined method, so its body is only JIT-compiled after this line ran.
+            string folder = null;
+            try { folder = GetDeclaration()?.FolderPath; } catch { }
+            LibResolver.Install(folder);
+            Load();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private void Load()
+        {
 #if DEBUG
-            Dev.DevConsole.Start();
+            // Separate debug console window: opt-in only (a line "console" in the .dev file).
+            if (Dev.DevAutoLogin.DevFlag("console")) Dev.DevConsole.Start();
 #endif
             try { ModInfo.Version = GetDeclaration()?.Version ?? ModInfo.Version; } catch { }
             ModLog.Info($"Loading WorldBox Multiplayer {ModInfo.Display}...");

@@ -9,4 +9,7 @@
   <Folder Name="/src/Shared/">
     <Project Path="src/Shared/WorldboxMP.Shared.csproj" />
   </Folder>
+  <Folder Name="/installer/">
+    <Project Path="installer/WorldboxMP.Installer.csproj" />
+  </Folder>
 </Solution>

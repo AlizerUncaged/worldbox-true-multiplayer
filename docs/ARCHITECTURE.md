@@ -130,33 +130,31 @@ Re-apply on the king: call the same APIs (`clickedFinal` via AccessTools with
   sprites at runtime and prefer a PNG from the mod's `icons/` folder if present.
 - Text/inputs: built from code with uGUI; `OT.InitializeCommonText(Text)` applies the game font.
 
-## 6. The mirroring plan (next milestones)
+## 6. How mirroring works
 
-**Intent → authority → broadcast.** A non-king player never mutates the shared
-world directly; it sends an **intent**. The king executes it and the resulting
-state is broadcast to everyone.
+**Intent → authority → broadcast.** A player who isn't the Owner never mutates the shared
+world directly; they send an **intent**. The Owner executes it and the resulting state is
+broadcast to everyone.
 
-1. **Capture (all clients):** Harmony-observe `clickedFinal` / `spawnNewUnit` /
-   `terraformTile`. On a non-king, *cancel* the local effect and send a
-   `MirrorMessage` intent (kind + tile + power/asset id). On the king, allow it
-   and emit the resulting authoritative event.
-2. **Authority (king):** the king applies intents in order, lets its local sim
-   run, and emits `EntityState`/spawn/terrain events with **server-assigned ids**.
-3. **Apply (followers):** followers have local AI/movement suppressed; they
-   create/move/destroy entities purely from broadcasts, maintaining a
-   `serverId → localActor` map.
-4. **Join:** new player receives a `WorldSnapshot` (king's `toZip()`), loads it,
-   then starts receiving live deltas. Pause/speed (`SimControl`) is applied last.
-5. **Cursors:** every client streams `CursorUpdate` (sequenced); others render a
-   floating hand + name.
+1. **Capture:** Harmony hooks observe the game (`clickedFinal`, unit creation, terraform,
+   structural create/remove, memberships, ...). On a follower, god-power clicks become
+   intents sent to the Owner; on the Owner, the resulting changes become authoritative events.
+2. **Authority (Owner):** the Owner applies intents in order, runs the only real simulation,
+   and emits events carrying the Owner's own object ids.
+3. **Apply (followers):** followers run AI-free and create/move/update/destroy entities
+   purely from the stream, so ids match the Owner's everywhere.
+4. **Join:** a new player receives the Owner's world as a chunked snapshot on its own
+   channel, loads it, then replays every live change made while it was loading.
+5. **Cursors:** every client streams its cursor (sequenced); others render a god hand + name.
 
-### Open problems being designed around
-- **ID remapping** (local id allocators collide) - server/king authoritative ids.
-- **Determinism** - avoided by single-authority simulation; followers never simulate.
-- **Snapshot cost** - multi-MB; only on join, not per tick. Live sync is deltas.
-- **King handoff** - if the king leaves, promote another client to authority and
-  reseed from its latest snapshot (future work; currently king-leave ends the
-  shared sim for that room).
+### Design decisions
+- **One authority:** only the Owner simulates, so there is no determinism problem to solve
+  and every client agrees on ids.
+- **Events first:** changes are sent when they happen; values the game updates in place are
+  sent only when they change; a light periodic check keeps everyone aligned.
+- **Snapshots only when needed:** on join, on a world change, or on request, never per tick.
+- **Owner handoff:** if the Owner leaves, an admin (or the longest-present player) becomes
+  the Owner and the world carries on.
 
 ## 7. Threading
 - **Server:** single thread; all handlers run on the `PollEvents` loop. No locks.

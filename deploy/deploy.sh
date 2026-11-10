@@ -5,9 +5,9 @@
 #
 #   deploy/deploy.sh root@your.server.ip [ssh options...]
 #
-# First run creates the `wbmp` user, /etc/worldbox-multiplayer.env (from the
-# repo's .env.example) and the systemd unit. Later runs just swap the binaries and
-# restart; the env file and the SQLite database are never touched.
+# First run creates the `wbmp` user, /etc/worldbox-multiplayer/appsettings.json (from
+# deploy/appsettings.server.json) and the systemd unit. Later runs just swap the binaries
+# and restart; your settings file and the SQLite database are never touched.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,11 +22,12 @@ dotnet publish src/Server/WorldboxMP.Server.csproj -c Release -r linux-x64 --sel
 tar -C out/linux -czf out/wbmp-server.tgz .
 
 "${SSH[@]}" 'mkdir -p /tmp/wbmp-deploy'
-scp "$@" out/wbmp-server.tgz deploy/worldbox-multiplayer.service .env.example "$TARGET:/tmp/wbmp-deploy/"
+scp "$@" out/wbmp-server.tgz deploy/worldbox-multiplayer.service deploy/appsettings.server.json "$TARGET:/tmp/wbmp-deploy/"
 
 "${SSH[@]}" 'set -e
   id wbmp >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin wbmp
-  [ -f /etc/worldbox-multiplayer.env ] || install -m 640 -g wbmp /tmp/wbmp-deploy/.env.example /etc/worldbox-multiplayer.env
+  mkdir -p /etc/worldbox-multiplayer
+  [ -f /etc/worldbox-multiplayer/appsettings.json ] || install -m 640 -g wbmp /tmp/wbmp-deploy/appsettings.server.json /etc/worldbox-multiplayer/appsettings.json
   install -m 644 /tmp/wbmp-deploy/worldbox-multiplayer.service /etc/systemd/system/worldbox-multiplayer.service
   rm -rf /opt/worldbox-multiplayer.new && mkdir -p /opt/worldbox-multiplayer.new
   tar -xzf /tmp/wbmp-deploy/wbmp-server.tgz -C /opt/worldbox-multiplayer.new

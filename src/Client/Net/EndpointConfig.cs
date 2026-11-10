@@ -35,7 +35,7 @@ namespace WorldboxMP.Client.Net
             {
                 // A malformed baked value should never brick the client - fall back to
                 // something inspectable and let the settings dialog rescue the user.
-                ModLog.Error("EndpointConfig: cannot parse MAIN_SERVER_SOURCE '" + src + "': " + e.Message);
+                ModLog.Error("EndpointConfig: cannot parse MainServerSource '" + src + "': " + e.Message);
                 Host = "127.0.0.1";
                 Port = Shared.Protocol.NetProtocol.DefaultPort;
                 ApiBase = "http://127.0.0.1:" + Port;

@@ -13,14 +13,13 @@ obj/
 *.nupkg
 packages/
 
-# Local secrets / config overrides. Only *.env.example templates are committed.
+# Local settings and secrets: appsettings.Local.json (server) and
+# WorldboxMP.Client.csproj.user (client build overrides) stay on your machine.
+appsettings.Local.json
+appsettings.*.Local.json
+*.local.json
 .env
 .env.*
-*.env
-!.env.example
-!*.env.example
-appsettings.Local.json
-*.local.json
 *.pfx
 *.p12
 *.pem

@@ -33,6 +33,11 @@ namespace WorldboxMP.Client.Mirror
                 // World load/generate detection: EVERY load path funnels through
                 // MapBox.clearWorld, so a postfix there is the one reliable "the king is
                 // switching worlds" signal (the actual resync waits for the load to settle).
+                // A world has finished building at least once since launch. Until then the
+                // game is still booting (the startup map waits for any startup popup), and a
+                // snapshot loaded on top of that collides with the game's own generation.
+                var finishWorld = AccessTools.Method(typeof(MapBox), "finishMakingWorld");
+                if (finishWorld != null) harmony.Patch(finishWorld, postfix: H(nameof(FinishMakingWorld_Postfix)));
                 var clearWorld = AccessTools.Method(typeof(MapBox), "clearWorld");
                 if (clearWorld != null) harmony.Patch(clearWorld, postfix: H(nameof(ClearWorld_Postfix)));
 
@@ -532,6 +537,9 @@ namespace WorldboxMP.Client.Mirror
         }
 
         private static int _structCreateLogged;
+        internal static bool WorldBuiltOnce;
+        private static void FinishMakingWorld_Postfix() => WorldBuiltOnce = true;
+
         private static void StructuralCreate_Postfix(object __result)
         {
             if (_structCreateLogged < 12) { _structCreateLogged++; ModLog.Info($"[KING] structural create hook fired: {(__result == null ? "null" : __result.GetType().Name)}"); }

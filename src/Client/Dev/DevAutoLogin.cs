@@ -66,6 +66,21 @@ namespace WorldboxMP.Client.Dev
             }
         }
 
+        /// <summary>True when the .dev file contains <paramref name="flag"/> on its own line.</summary>
+        public static bool DevFlag(string flag)
+        {
+            try
+            {
+                string root = Directory.GetParent(Application.dataPath)?.FullName;
+                string path = root != null ? Path.Combine(root, ".dev") : null;
+                if (path == null || !File.Exists(path)) return false;
+                foreach (var line in File.ReadAllLines(path))
+                    if (string.Equals(line.Trim(), flag, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            catch { }
+            return false;
+        }
+
         private static bool DevFileExists()
         {
             try

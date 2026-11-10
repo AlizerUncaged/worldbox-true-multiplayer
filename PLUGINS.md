@@ -1,8 +1,13 @@
 # Making your mod compatible with WorldBox Multiplayer
 
-WorldBox Multiplayer (WBMP) runs one authoritative simulation on the room's **God King**;
-every other player is a **follower** that mirrors it (follower unit AI is suppressed and
-world changes stream in from the king). If your mod changes the world on every client
+> The full, up-to-date guide lives in the wiki:
+> [SDK Overview](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/SDK-Overview),
+> [API Reference](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/SDK-API-Reference),
+> [Examples](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/SDK-Examples).
+
+WorldBox Multiplayer (WBMP) runs one authoritative simulation on the room's **Owner**
+(called "King" in the API); every other player is a **follower** that mirrors it (follower
+unit AI is suppressed and world changes stream in from the Owner). If your mod changes the world on every client
 independently, the worlds drift apart. This guide shows how to make it sync instead.
 
 Everything you need is one public class: `WorldboxMP.Client.Api.WbmpApi`.
@@ -22,12 +27,12 @@ That's it. If WBMP isn't installed, don't reference the DLL; if you want an opti
 ```csharp
 void SpawnMyCustomThing(WorldTile tile)
 {
-    if (!WbmpApi.IsAuthority) return;   // follower: the king will tell us about it
+    if (!WbmpApi.IsAuthority) return;   // follower: the Owner will tell us about it
     // ... actually spawn the thing ...
 }
 ```
 
-`IsAuthority` is `true` in single player AND when you are the room's king, so the same
+`IsAuthority` is `true` in single player AND when you are the room's Owner, so the same
 check works everywhere and costs nothing outside multiplayer.
 
 ## Role and session state
@@ -35,8 +40,8 @@ check works everywhere and costs nothing outside multiplayer.
 | Member | Meaning |
 |---|---|
 | `WbmpApi.InRoom` | connected and inside a multiplayer room |
-| `WbmpApi.IsAuthority` | single player, or the room's king - run your sim logic when true |
-| `WbmpApi.IsKing` | in a room and this client is the king |
+| `WbmpApi.IsAuthority` | single player, or the room's Owner - run your sim logic when true |
+| `WbmpApi.IsKing` | in a room and this client is the Owner |
 | `WbmpApi.IsFollower` | in a room, mirroring someone else's world |
 | `WbmpApi.ApplyingRemote` | true while WBMP is applying a synced action; use in your Harmony hooks to skip re-broadcasting replayed actions |
 | `WbmpApi.Username`, `WbmpApi.RoomId`, `WbmpApi.Players` | session info |

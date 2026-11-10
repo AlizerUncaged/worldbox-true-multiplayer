@@ -143,15 +143,23 @@
     <ModVersion>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</ModVersion>
   </PropertyGroup>
 
-  <!-- Bake src/Client/.env (or .env.example) into generated constants (BuildConfig.g.cs in obj/):
-       the official server origin ships inside the DLL, never as a file. -->
+  <!-- The official server origin, baked into the DLL as a constant (BuildConfig.g.cs in obj/).
+       Forks override it without editing this file:
+         dotnet build -p:MainServerSource=https://my.server:40441
+       or put <MainServerSource> in a git-ignored WorldboxMP.Client.csproj.user next to this file.
+       Scheme picks the shared TCP+UDP port (https=443, http=80); an explicit :port wins. -->
+  <PropertyGroup>
+    <MainServerSource Condition="'$(MainServerSource)' == ''">http://65.75.203.165:50001</MainServerSource>
+  </PropertyGroup>
   <Target Name="GenerateBuildConfig" BeforeTargets="CoreCompile">
-    <PropertyGroup>
-      <!-- Local .env (git-ignored) wins; otherwise the committed .env.example. -->
-      <_BakeEnv Condition="Exists('$(MSBuildProjectDirectory)\.env')">$(MSBuildProjectDirectory)\.env</_BakeEnv>
-      <_BakeEnv Condition="'$(_BakeEnv)' == ''">$(MSBuildProjectDirectory)\.env.example</_BakeEnv>
-    </PropertyGroup>
-    <Exec Command="python &quot;$(MSBuildProjectDirectory)\bake_env.py&quot; &quot;$(_BakeEnv)&quot; &quot;$(IntermediateOutputPath)BuildConfig.g.cs&quot;" />
+    <ItemGroup>
+      <_BuildConfigLines Include="// &lt;auto-generated&gt; From the MainServerSource MSBuild property. Do not edit. &lt;/auto-generated&gt;" />
+      <_BuildConfigLines Include="namespace WorldboxMP.Client { public static class BuildConfig {" />
+      <_BuildConfigLines Include="    /// &lt;summary&gt;The official server origin baked at build time.&lt;/summary&gt;" />
+      <_BuildConfigLines Include="    public const string MainServerSource = &quot;$(MainServerSource)&quot;%3B" />
+      <_BuildConfigLines Include="} }" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)BuildConfig.g.cs" Lines="@(_BuildConfigLines)" Overwrite="true" WriteOnlyWhenDifferent="true" />
     <ItemGroup>
       <Compile Include="$(IntermediateOutputPath)BuildConfig.g.cs" />
     </ItemGroup>
@@ -161,7 +169,11 @@
        mod.json) into the live Mods folder so deploys never go out of sync. -->
   <Target Name="DeployToMods" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
     <ItemGroup>
-      <_DeployFiles Include="$(OutDir)*.dll" />
+      <!-- Only the mod DLL at the top level (NeoModLoader treats every top-level DLL as a mod);
+           dependencies go to lib/ and are resolved by LibResolver. -->
+      <_DeployFiles Include="$(OutDir)WorldboxMP.Client.dll" />
+      <_DeployLibs Include="$(OutDir)LiteNetLib.dll;$(OutDir)WorldboxMP.Shared.dll" />
+      <_StaleRootLibs Include="$(DeployDir)\LiteNetLib.dll;$(DeployDir)\WorldboxMP.Shared.dll" />
       <_DeployFiles Include="$(OutDir)mod.json" Condition="Exists('$(OutDir)mod.json')" />
       <_DeployFiles Include="$(OutDir)icon.png" Condition="Exists('$(OutDir)icon.png')" />
       <!-- 3D easter-egg models loaded at runtime from the mod folder. -->
@@ -169,6 +181,8 @@
     </ItemGroup>
     <MakeDir Directories="$(DeployDir)" />
     <Copy SourceFiles="@(_DeployFiles)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="@(_DeployLibs)" DestinationFolder="$(DeployDir)\lib" SkipUnchangedFiles="false" />
+    <Delete Files="@(_StaleRootLibs)" ContinueOnError="true" />
     <Copy SourceFiles="@(_DeployGlb)" DestinationFolder="$(DeployDir)" SkipUnchangedFiles="true" />
     <!-- Script file, not python -c: inline commands pass through cmd.exe, which eats
          the ^ in the regex and silently leaves the placeholder version in place. -->
@@ -196,14 +210,14 @@
     <Exec Command="dotnet tool run obfuscar.console &quot;$(TargetDir)obfuscar.generated.xml&quot;" WorkingDirectory="$(TargetDir)" EnvironmentVariables="DOTNET_CLI_TELEMETRY_OPTOUT=1;DOTNET_NOLOGO=1" />
     <ItemGroup>
       <_ShipDlls Include="$(TargetDir)obfuscated\WorldboxMP.Client.dll" />
-      <_ShipDlls Include="$(TargetDir)WorldboxMP.Shared.dll" />
-      <_ShipDlls Include="$(TargetDir)LiteNetLib.dll" />
+      <_ShipLibs Include="$(TargetDir)WorldboxMP.Shared.dll;$(TargetDir)LiteNetLib.dll" />
       <_ShipFiles Include="$(OutDir)mod.json" Condition="Exists('$(OutDir)mod.json')" />
       <_ShipFiles Include="$(OutDir)icon.png" Condition="Exists('$(OutDir)icon.png')" />
       <_ShipGlb Include="$(MSBuildProjectDirectory)\Assets3D\*.glb" />
     </ItemGroup>
     <MakeDir Directories="$(PublishModDir)" />
     <Copy SourceFiles="@(_ShipDlls)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="@(_ShipLibs)" DestinationFolder="$(PublishModDir)\lib" SkipUnchangedFiles="false" />
     <Copy SourceFiles="@(_ShipFiles)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="false" />
     <Copy SourceFiles="@(_ShipGlb)" DestinationFolder="$(PublishModDir)" SkipUnchangedFiles="true" />
     <Exec Command="python &quot;$(MSBuildProjectDirectory)\stamp_version.py&quot; &quot;$(PublishModDir)\mod.json&quot; $(ModVersion)" />

@@ -7,7 +7,7 @@ namespace WorldboxMP.Server.Data
 {
     /// <summary>
     /// SQLite-backed accounts: the zero-dependency option for self-hosted instances
-    /// ("DatabaseBrand": "sqlite"). One file next to the exe, schema auto-created.
+    /// ("Database:Provider": "sqlite"). One file next to the exe, schema auto-created.
     /// All calls run on the single auth worker thread, so one open connection is fine.
     /// </summary>
     public class SqlitePlayerStore : IPlayerStore

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and run the WorldBox Multiplayer server from a checkout (Linux, macOS, Git Bash).
-# Settings come from src/Server/appsettings.json, a .env file next to the binary or in
-# the current directory, and env vars (env wins). See deploy/server.env.example.
+# Settings: src/Server/appsettings.json (defaults), then appsettings.Local.json in this
+# folder (git-ignored, your overrides/secrets), then WBMP_* environment variables.
 set -euo pipefail
 cd "$(dirname "$0")"
 
