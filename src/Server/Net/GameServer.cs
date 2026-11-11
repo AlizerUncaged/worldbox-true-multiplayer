@@ -188,19 +188,24 @@ namespace WorldboxMP.Server.Net
         private void OnRegister(RegisterRequest req, NetPeer peer)
         {
             var s = SessionOf(peer); if (s == null || s.AuthPending) return;
-            RunAuth(peer, s, () => _auth.Register(req.Username, req.Password, remember: true), viaToken: false, register: true);
+            // Copy the fields now: the packet processor reuses one request instance per type,
+            // so by the time the auth worker runs, req may already hold another player's login.
+            string user = req.Username, pass = req.Password;
+            RunAuth(peer, s, () => _auth.Register(user, pass, remember: true), viaToken: false, register: true);
         }
 
         private void OnLogin(LoginRequest req, NetPeer peer)
         {
             var s = SessionOf(peer); if (s == null || s.AuthPending) return;
-            RunAuth(peer, s, () => _auth.Login(req.Username, req.Password, req.Remember), viaToken: false, register: false);
+            string user = req.Username, pass = req.Password; bool remember = req.Remember;   // see OnRegister
+            RunAuth(peer, s, () => _auth.Login(user, pass, remember), viaToken: false, register: false);
         }
 
         private void OnTokenLogin(TokenLoginRequest req, NetPeer peer)
         {
             var s = SessionOf(peer); if (s == null || s.AuthPending) return;
-            RunAuth(peer, s, () => _auth.TokenLogin(req.Token), viaToken: true, register: false);
+            string token = req.Token;   // see OnRegister
+            RunAuth(peer, s, () => _auth.TokenLogin(token), viaToken: true, register: false);
         }
 
         private void OnLogout(LogoutRequest req, NetPeer peer)
