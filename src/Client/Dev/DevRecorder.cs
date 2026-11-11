@@ -40,11 +40,16 @@ namespace WorldboxMP.Client.Dev
         private IEnumerator Run(string dir, float seconds, int fps)
         {
             Recording = true;
+            // The real mouse may rest over this window while nobody is playing, and the game
+            // pops hover tooltips for whatever walks under it. Clear them before the first frame.
+            BlockTooltips();
+            for (int i = 0; i < 3; i++) yield return null;
             float start = Time.realtimeSinceStartup, interval = 1f / fps;
             int index = 0;
             var eof = new WaitForEndOfFrame();
             while (Time.realtimeSinceStartup - start < seconds)
             {
+                BlockTooltips();
                 yield return eof;
                 // One captured frame per tick of the wall clock; duplicate it if the game ran
                 // slower than the target rate so the clip keeps real-time speed.
@@ -75,6 +80,11 @@ namespace WorldboxMP.Client.Dev
                 });
             }
             Recording = false;
+        }
+
+        private static void BlockTooltips()
+        {
+            try { Tooltip.blockTooltips(0.5f); } catch { }
         }
     }
 }
