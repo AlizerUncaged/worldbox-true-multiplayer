@@ -16,7 +16,7 @@ namespace WorldboxMP.Installer
     internal sealed class ModInstaller
     {
         private const string NmlReleases = "https://api.github.com/repos/WorldBoxOpenMods/ModLoader/releases/latest";
-        private const string ModReleases = "https://api.github.com/repos/AlizerUncaged/worldbox-multiplayer/releases";
+        private const string ModReleases = "https://api.github.com/repos/AlizerUncaged/worldbox-true-multiplayer/releases";
         private const string ModFolderName = "WorldBoxMultiplayer";
 
         private readonly string _game;

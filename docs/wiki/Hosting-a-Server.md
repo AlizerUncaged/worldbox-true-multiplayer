@@ -7,7 +7,7 @@ nothing else to install. One port number carries both the game (UDP) and a small
 ## Quick start
 
 Download `WorldBoxMultiplayer-Server-<version>-<platform>` from the
-[releases](https://github.com/AlizerUncaged/worldbox-multiplayer/releases) (self-contained:
+[releases](https://github.com/AlizerUncaged/worldbox-true-multiplayer/releases) (self-contained:
 no .NET needed), extract it and run `WorldboxMP.Server` (`WorldboxMP.Server.exe` on Windows).
 
 From source:

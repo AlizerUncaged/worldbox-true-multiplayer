@@ -3,7 +3,7 @@
 An optional web dashboard for server operators, served by the game server itself on its
 own port.
 
-<p align="center"><img src="https://raw.githubusercontent.com/AlizerUncaged/worldbox-multiplayer/main/docs/images/screens/admin-light.png" width="720"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/AlizerUncaged/worldbox-true-multiplayer/main/docs/images/screens/admin-light.png" width="720"></p>
 
 ## Turn it on
 

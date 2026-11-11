@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/AlizerUncaged/worldbox-multiplayer/main/docs/images/logo.png" alt="WorldBox Multiplayer" width="420"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/AlizerUncaged/worldbox-true-multiplayer/main/docs/images/logo.png" alt="WorldBox Multiplayer" width="420"></p>
 
 **WorldBox Multiplayer** lets several players share one living WorldBox world in real time.
 Every creature, building, kingdom, war, culture and god power is mirrored to the whole room
@@ -25,13 +25,13 @@ as it happens, and you can see each other's god hands moving over the map.
 ## Contributing
 
 Everyone is welcome: bug reports, sync testing, code, docs, art and mods. Start with
-[CONTRIBUTING.md](https://github.com/AlizerUncaged/worldbox-multiplayer/blob/main/CONTRIBUTING.md)
+[CONTRIBUTING.md](https://github.com/AlizerUncaged/worldbox-true-multiplayer/blob/main/CONTRIBUTING.md)
 and [Extending the Mod](Extending-the-Mod), and say hi in
-[Discussions](https://github.com/AlizerUncaged/worldbox-multiplayer/discussions).
+[Discussions](https://github.com/AlizerUncaged/worldbox-true-multiplayer/discussions).
 
 ## Links
 
-- Source: <https://github.com/AlizerUncaged/worldbox-multiplayer>
-- Releases: <https://github.com/AlizerUncaged/worldbox-multiplayer/releases>
+- Source: <https://github.com/AlizerUncaged/worldbox-true-multiplayer>
+- Releases: <https://github.com/AlizerUncaged/worldbox-true-multiplayer/releases>
 - NeoModLoader: <https://github.com/WorldBoxOpenMods/ModLoader>
 - License: MIT

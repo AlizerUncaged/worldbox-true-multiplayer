@@ -6,7 +6,7 @@ the mod.
 ## One-click installer (recommended)
 
 1. Download `WorldBoxMultiplayer-Installer.exe` from the
-   [latest release](https://github.com/AlizerUncaged/worldbox-multiplayer/releases).
+   [latest release](https://github.com/AlizerUncaged/worldbox-true-multiplayer/releases).
 2. Close WorldBox and run the installer. It finds your WorldBox folder through Steam (any
    Steam library drive). If it can't, click **Browse** and pick `worldbox.exe`.
 3. Click **Install**. It downloads and installs:
@@ -35,7 +35,7 @@ Exit code `0` = installed, `1` = failed, `2` = WorldBox not found.
    `<WorldBox>/worldbox_Data/StreamingAssets/mods/`. If you have `NCMS_memload.dll` there,
    remove it.
 2. **The mod:** download `WorldBoxMultiplayer-<version>.zip` from the
-   [releases](https://github.com/AlizerUncaged/worldbox-multiplayer/releases) and extract it
+   [releases](https://github.com/AlizerUncaged/worldbox-true-multiplayer/releases) and extract it
    into `<WorldBox>/Mods/WorldBoxMultiplayer/`. The folder should look like this:
 
    ```

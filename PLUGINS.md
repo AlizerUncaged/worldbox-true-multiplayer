@@ -1,9 +1,9 @@
 # Making your mod compatible with WorldBox Multiplayer
 
 > The full, up-to-date guide lives in the wiki:
-> [SDK Overview](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/SDK-Overview),
-> [API Reference](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/SDK-API-Reference),
-> [Examples](https://github.com/AlizerUncaged/worldbox-multiplayer/wiki/SDK-Examples).
+> [SDK Overview](https://github.com/AlizerUncaged/worldbox-true-multiplayer/wiki/SDK-Overview),
+> [API Reference](https://github.com/AlizerUncaged/worldbox-true-multiplayer/wiki/SDK-API-Reference),
+> [Examples](https://github.com/AlizerUncaged/worldbox-true-multiplayer/wiki/SDK-Examples).
 
 WorldBox Multiplayer (WBMP) runs one authoritative simulation on the room's **Owner**
 (called "King" in the API); every other player is a **follower** that mirrors it (follower
