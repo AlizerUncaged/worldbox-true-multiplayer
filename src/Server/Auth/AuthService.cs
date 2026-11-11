@@ -48,9 +48,15 @@ namespace WorldboxMP.Server.Auth
 
             if (username.Length < 3 || username.Length > 24)
                 return AuthResult.Fail("Username must be 3-24 characters.");
-            foreach (char c in username)
-                if (!(char.IsAsciiLetterOrDigit(c) || c == '_' || c == '-' || c == '.'))
-                    return AuthResult.Fail("Username: letters, digits, _ - . only.");
+            // Letters, digits, _ - . and single spaces between words ("The Real Rael").
+            // Trim() above already removed leading/trailing spaces.
+            for (int i = 0; i < username.Length; i++)
+            {
+                char c = username[i];
+                bool ok = char.IsAsciiLetterOrDigit(c) || c == '_' || c == '-' || c == '.'
+                          || (c == ' ' && username[i - 1] != ' ');
+                if (!ok) return AuthResult.Fail("Username: letters, digits, _ - . and single spaces only.");
+            }
             if (password.Length < 4 || password.Length > 64)
                 return AuthResult.Fail("Password must be 4-64 characters.");
 

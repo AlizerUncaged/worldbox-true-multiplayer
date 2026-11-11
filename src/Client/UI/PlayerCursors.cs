@@ -36,6 +36,9 @@ namespace WorldboxMP.Client.UI
 
         public static PlayerCursors Instance { get; private set; }
 
+        /// <summary>Dev tooling: stop streaming this client's own cursor (staged screenshots).</summary>
+        public static bool SuppressLocalSend;
+
         /// <summary>Dev diagnostics: every remote cursor's state as JSON.</summary>
         public string DebugJson()
         {
@@ -110,7 +113,7 @@ namespace WorldboxMP.Client.UI
                 if (v.Label != null) { var c = v.Label.color; c.a = alpha; v.Label.color = c; }
             }
 
-            if (net == null || !net.InRoom || net.State != ConnState.Connected || cam == null) return;
+            if (net == null || !net.InRoom || net.State != ConnState.Connected || cam == null || SuppressLocalSend) return;
             _sendTimer += Time.unscaledDeltaTime;
             if (_sendTimer < SendInterval) return;
             _sendTimer = 0f;

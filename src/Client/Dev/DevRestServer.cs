@@ -153,6 +153,52 @@ namespace WorldboxMP.Client.Dev
                     catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "cursors": return WorldboxMP.Client.UI.PlayerCursors.Instance?.DebugJson() ?? "{\"error\":\"no cursors\"}";
                 case "meta": return Meta();
+                case "record":
+                    // Promo clip frames from this game's own renderer: ?dir=&seconds=&fps=, or ?status=1.
+                    if (Get(q, "status", "0") == "1") return Ok(DevRecorder.Status);
+                    return Ok(DevRecorder.Start(Get(q, "dir", Path.Combine(Path.GetTempPath(), "wbmp-rec")),
+                        float.Parse(Get(q, "seconds", "10"), CultureInfo.InvariantCulture), GetI(q, "fps", 30)));
+                case "resolution":
+                    // Windowed size for recordings (e.g. 1600x900 for a 16:9 video).
+                    try { Screen.SetResolution(GetI(q, "w", 1600), GetI(q, "h", 900), FullScreenMode.Windowed); return Ok("resolution " + GetI(q, "w", 1600) + "x" + GetI(q, "h", 900)); }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "cursorsend": WorldboxMP.Client.UI.PlayerCursors.SuppressLocalSend = Get(q, "on", "1") == "0"; return Ok("local cursor send " + Get(q, "on", "1"));
+                case "camera":
+                    // Frame the view for screenshots: ?city=<id> or ?x=&y=, plus ?zoom= (orthographic size).
+                    try
+                    {
+                        float zoom = float.Parse(Get(q, "zoom", "40"), CultureInfo.InvariantCulture);
+                        Vector3 pos;
+                        long cid = long.Parse(Get(q, "city", "0"));
+                        if (cid > 0)
+                        {
+                            var city = World.world.cities.get(cid);
+                            var t = city?.getTile();
+                            if (t == null) return "{\"error\":\"no such city\"}";
+                            pos = new Vector3(t.pos.x, t.pos.y, 0f);
+                        }
+                        else pos = new Vector3(GetI(q, "x", MapBox.width / 2), GetI(q, "y", MapBox.height / 2), 0f);
+                        // MoveCamera.instance is public only in the publicized reference assembly;
+                        // at runtime it is not, so touch it by reflection (a direct access breaks
+                        // this whole method at JIT time).
+                        var mcType = AccessTools.TypeByName("MoveCamera");
+                        var mc = AccessTools.Field(mcType, "instance")?.GetValue(null);
+                        var cam = Camera.main;
+                        if (cam != null) cam.transform.position = new Vector3(pos.x, pos.y, cam.transform.position.z);
+                        if (mc != null) AccessTools.Method(mcType, "forceZoom", new[] { typeof(float) })?.Invoke(mc, new object[] { zoom });
+                        return "{\"ok\":\"camera\",\"x\":" + pos.x + ",\"y\":" + pos.y + "}";
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
+                case "hud":
+                    // Hide/show the mod's own overlays (version + ping badge) for clean screenshots.
+                    try
+                    {
+                        bool show = Get(q, "show", "1") != "0";
+                        foreach (var go in Resources.FindObjectsOfTypeAll<Canvas>())
+                            if (go != null && go.gameObject.name == "WBMP_PingCanvas") go.gameObject.SetActive(show);
+                        return Ok("hud " + (show ? "shown" : "hidden"));
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "plugin":
                     // SDK test: register the dev channel once, then send on it.
                     if (!_pluginReg)

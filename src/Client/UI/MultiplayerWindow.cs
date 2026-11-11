@@ -337,7 +337,7 @@ namespace WorldboxMP.Client.UI
         private void DoRegister()
         {
             string u = _userField.text.Trim(), p = _passField.text;
-            if (u.Length < 3) { Msg("Pick a username (3-24 letters/digits).", MsgKind.Error); return; }
+            if (u.Length < 3) { Msg("Pick a username (3-24 characters).", MsgKind.Error); return; }
             if (p.Length < 4) { Msg("Pick a password (at least 4 characters).", MsgKind.Error); return; }
             Net.Register(u, p);
             Msg("Creating your account...", MsgKind.Info);
