@@ -127,9 +127,15 @@ namespace WorldboxMP.Client.Mirror
 
                 // Status effects.
                 var addStatus = AccessTools.Method(typeof(Actor), "addStatusEffect", new[] { typeof(StatusAsset), typeof(float), typeof(bool) });
-                if (addStatus != null) harmony.Patch(addStatus, postfix: H(nameof(AddStatus_Postfix)));
-                var finishStatus = AccessTools.Method(typeof(BaseSimObject), "finishStatusEffect", new[] { typeof(string) });
-                if (finishStatus != null) harmony.Patch(finishStatus, postfix: H(nameof(FinishStatus_Postfix)));
+                if (addStatus != null) harmony.Patch(addStatus, prefix: H(nameof(AddStatus_Prefix)), postfix: H(nameof(AddStatus_Postfix)));
+                // Removal is mirrored where every status ends: StatusManager.removeObject. A status
+                // that simply runs out never goes through finishStatusEffect, and followers don't
+                // tick status timers, so hooking only finishStatusEffect left expired statuses
+                // (pregnancies...) stuck on followers - and a promoted follower then had them all
+                // finish at once (hundreds of births).
+                var removeStatus = AccessTools.Method(typeof(StatusManager), "removeObject", new[] { typeof(Status) });
+                if (removeStatus != null) harmony.Patch(removeStatus, postfix: H(nameof(StatusRemoved_Postfix)));
+                else ModLog.Warn("hook MISS: StatusManager.removeObject");
 
                 // Equipment.
                 var setItem = AccessTools.Method(typeof(ActorEquipment), "setItem", new[] { typeof(Item), typeof(Actor) });
@@ -338,6 +344,7 @@ namespace WorldboxMP.Client.Mirror
                 _unitsPrepMeta       = AccessTools.Method(typeof(ActorManager), "prepareForMetaChecks");
                 _unitsCalcVisible    = AccessTools.Method(typeof(ActorManager), "calculateVisibleActors");
                 _unitsUpdate         = AccessTools.Method(typeof(ActorManager), "update", new[] { typeof(float) });
+                _statusCheckDead     = AccessTools.Method(typeof(StatusManager), "checkDead");
                 _unitsCheckDestroy   = AccessTools.Method(typeof(ActorManager), "checkObjectsToDestroy");
                 var sim = AccessTools.Method(typeof(MapBox), "updateSimulation", new[] { typeof(float) });
                 if (sim != null && _unitsUpdate != null) harmony.Patch(sim, prefix: H(nameof(PassiveSim_Prefix)));
@@ -521,14 +528,23 @@ namespace WorldboxMP.Client.Mirror
             MirrorManager.Instance?.OnKingHealth(__instance);
         }
 
+        // Statuses are king-authoritative. A follower's own actor update (water, fire...) added
+        // statuses the king never had, and followers don't tick status timers, so they stuck.
+        private static bool AddStatus_Prefix()
+        {
+            var m = MirrorManager.Instance;
+            return !(m != null && m.IsFollower && !m.ApplyingStatus);
+        }
+
         private static void AddStatus_Postfix(Actor __instance, StatusAsset pStatusAsset, float pOverrideTimer)
         {
             if (pStatusAsset != null) MirrorManager.Instance?.OnKingStatus(__instance, pStatusAsset.id, pOverrideTimer, true);
         }
 
-        private static void FinishStatus_Postfix(BaseSimObject __instance, string pID)
+        private static void StatusRemoved_Postfix(Status pObject)
         {
-            if (__instance is Actor a) MirrorManager.Instance?.OnKingStatus(a, pID, 0f, false);
+            if (pObject?.sim_object is Actor a && a.isAlive() && pObject.asset != null)
+                MirrorManager.Instance?.OnKingStatus(a, pObject.asset.id, 0f, false);
         }
 
         private static void SetItem_Postfix(Item pItem, Actor pActor)
@@ -762,7 +778,7 @@ namespace WorldboxMP.Client.Mirror
         private static int _suppressedBuilds;
 
         private static MethodInfo _mbUpdateBuildings, _mbUpdateMapLayers, _animUpdateTime, _enemiesClear, _buildingsUpdate, _buildingZonesUpdate, _cityStatusUpdate;
-        private static MethodInfo _unitsCheckContainer, _unitsPrepMeta, _unitsCalcVisible, _unitsUpdate, _unitsCheckDestroy;
+        private static MethodInfo _unitsCheckContainer, _unitsPrepMeta, _unitsCalcVisible, _unitsUpdate, _unitsCheckDestroy, _statusCheckDead;
         private static FieldInfo _dropMgrField, _projMgrField, _dropLandedField;
         private static MethodInfo _dropUpdate, _projUpdate, _landDropMethod;
         private static bool _passiveLogged;
@@ -777,7 +793,7 @@ namespace WorldboxMP.Client.Mirror
         {
             LastSimElapsed = pElapsed; SimCallsThisInterval++;
             var m = MirrorManager.Instance;
-            if (m == null || !m.IsFollower) return true; // king/idle: full simulation
+            if (m == null || !m.IsFollower) { m?.CheckLeftFollower(); return true; } // king/idle: full simulation
 
             float dt = Time.fixedDeltaTime;
             Safe(_enemiesClear, null, null);
@@ -792,6 +808,12 @@ namespace WorldboxMP.Client.Mirror
                 Safe(_unitsUpdate, units, new object[] { pElapsed });          // movement interp + render + animation
                 Safe(_unitsCheckDestroy, units, null);                        // finalize corpses (death)
             }
+            // Drop statuses the king ended (marked finished by ApplyStatus). The status manager's
+            // update lives in the skipped simulation; its checkDead only removes finished
+            // statuses and runs no status action. Without it a removed status stayed in the
+            // actor's dictionary, and a later re-add only reset the timer of the dead entry.
+            // Its `list` is the cache checkDead walks, stale on followers like the meta lists below.
+            try { var st = World.world?.statuses; if (st != null) { RefreshList(st); Safe(_statusCheckDead, st, null); } } catch { }
             // Real building batch update (sets is_visible via the updateVisibility job) so
             // buildings render in HIGH-RES, not just the low-res chunk texture. updateBuildings
             // itself is a debug-gated no-op, so call BuildingManager.update directly. Guarded

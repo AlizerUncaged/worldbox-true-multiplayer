@@ -131,6 +131,7 @@ namespace WorldboxMP.Client.Mirror
         /// Read by the dev bridge to prove every meta system actually crosses the wire.</summary>
         public static readonly int[] ObjSentByKind = new int[32], ObjAppliedByKind = new int[32], ObjFailedByKind = new int[32];
         private static readonly List<ObjReg> _objReg = new List<ObjReg>();
+        internal bool ApplyingStatus => _applyingStatus;
         private bool _applyingStatus, _applyingEquip, _applyingObject, _applyingMember, _applyingCapture, _applyingKProp;
 
         private static long IdOf(object o)
@@ -1219,10 +1220,33 @@ namespace WorldboxMP.Client.Mirror
             catch (Exception e) { ModLog.Warn("ApplyHealth failed: " + e.Message); }
         }
 
+        // Status adds for units not spawned here yet. The king sends a new unit's spawn one
+        // frame late (so its record is settled) but statuses it gets at birth (migrants'
+        // handsome_migrant...) right away, so they arrived first and were dropped.
+        private struct PendingStatus { public StatusMsg Msg; public float Until; }
+        private readonly List<PendingStatus> _pendingStatuses = new List<PendingStatus>();
+
+        private void RetryPendingStatuses()
+        {
+            if (_pendingStatuses.Count == 0) return;
+            float now = UnityEngine.Time.unscaledTime;
+            for (int i = _pendingStatuses.Count - 1; i >= 0; i--)
+            {
+                var p = _pendingStatuses[i];
+                if (Resolve(p.Msg.Id) != null) { _pendingStatuses.RemoveAt(i); ApplyStatus(p.Msg); }
+                else if (now > p.Until) _pendingStatuses.RemoveAt(i);
+            }
+        }
+
         private void ApplyStatus(StatusMsg m)
         {
             var a = Resolve(m.Id);
-            if (a == null) return;
+            if (a == null)
+            {
+                if (m.Add) _pendingStatuses.Add(new PendingStatus { Msg = m, Until = UnityEngine.Time.unscaledTime + 5f });
+                else _pendingStatuses.RemoveAll(p => p.Msg.Id == m.Id && p.Msg.StatusId == m.StatusId);
+                return;
+            }
             _applyingStatus = true;
             try
             {
@@ -1514,6 +1538,15 @@ namespace WorldboxMP.Client.Mirror
                         var obj = get?.Invoke(mgr, new object[] { m.Id });
                         if (obj == null) return;
                         _applyingObject = true;
+                        if (obj is Building b)
+                        {
+                            // The game's own teardown, not a bare removeObject: that skipped the
+                            // zone, tiles, the asset's building list, occupied_buildings and the
+                            // job batches, leaving dead references the full simulation trips on.
+                            DetachBuilding(b);
+                            if (_buildingDestroy == null) _buildingDestroy = AccessTools.Method(typeof(BuildingManager), "destroyObject", new[] { typeof(Building) });
+                            if (_buildingDestroy != null) { _buildingDestroy.Invoke(mgr, new object[] { b }); return; }
+                        }
                         var rem = AccessTools.Method(mgr.GetType(), "removeObject", new[] { r.ObjType });
                         rem?.Invoke(mgr, new[] { obj });
                     }
@@ -1958,8 +1991,171 @@ namespace WorldboxMP.Client.Mirror
         }
 
         // ── King streaming (pumped by NetPump) ──────────────────────────────
+        // ── Leaving the follower role ───────────────────────────────────────
+        // Followers create every mirrored object under the king's id, so their own id
+        // counters (map_stats.id_unit, id_building...) never move. Once this client runs the
+        // full simulation again (promoted to owner, or left the room) the first new building
+        // or unit reused a taken id: the add threw halfway, left a building without an asset
+        // in its zone, and the city update then threw every tick - the world froze.
+        private bool _wasFollower;
+
+        /// <summary>Called every frame (Pump and the simulation hook): when this client just
+        /// stopped being a follower, make its world safe to simulate on its own.</summary>
+        internal void CheckLeftFollower()
+        {
+            bool follower = Active && IsFollower;
+            if (_wasFollower && !follower)
+            {
+                try { RaiseIdCounters(); } catch (Exception e) { ModLog.Warn("RaiseIdCounters: " + e.Message); }
+                try { PurgeStaleZoneBuildings(); } catch (Exception e) { ModLog.Warn("PurgeStaleZoneBuildings: " + e.Message); }
+                try { ResetActorAi(); } catch (Exception e) { ModLog.Warn("ResetActorAi: " + e.Message); }
+                try { PurgeDestroyQueue(World.world?.buildings); PurgeDestroyQueue(World.world?.units); } catch (Exception e) { ModLog.Warn("PurgeDestroyQueue: " + e.Message); }
+                try { PurgeStaleSet(World.world?.buildings, "occupied_buildings"); } catch (Exception e) { ModLog.Warn("PurgeStaleSet: " + e.Message); }
+                try { ClearVisualProjectiles(); } catch (Exception e) { ModLog.Warn("ClearVisualProjectiles: " + e.Message); }
+                try { ClearDanglingLinks(); } catch { }
+            }
+            _wasFollower = follower;
+        }
+
+        private static MethodInfo _buildingClearTiles, _buildingDestroy;
+
+        /// <summary>The steps of the game's removeBuildingFinal that removeObject skips: free the
+        /// tiles and leave the zone. Without them the destroyed building stayed in its zone's
+        /// set; followers' guards skip it, but once promoted the city update threw on it every
+        /// tick and the world froze.</summary>
+        private static void DetachBuilding(Building b)
+        {
+            try
+            {
+                if (_buildingClearTiles == null) _buildingClearTiles = AccessTools.Method(typeof(Building), "clearTiles");
+                _buildingClearTiles?.Invoke(b, null);
+            }
+            catch { }
+            try { b.current_tile?.zone?.removeBuildingMain(b); } catch { }
+        }
+
+        /// <summary>Drop zone entries whose building no longer exists (safety net for buildings
+        /// removed before DetachBuilding existed, or by any path that skipped it).</summary>
+        internal static int PurgeStaleZoneBuildings()
+        {
+            var w = World.world;
+            var calc = w != null ? AccessTools.Field(typeof(MapBox), "zone_calculator")?.GetValue(w) as ZoneCalculator : null;
+            var dict = w?.buildings != null ? AccessTools.Field(w.buildings.GetType(), "dict")?.GetValue(w.buildings) as System.Collections.IDictionary : null;
+            if (calc == null || dict == null) return 0;
+            int purged = 0;
+            var stale = new List<Building>();
+            foreach (var zone in calc.zones)
+            {
+                if (zone == null) continue;
+                stale.Clear();
+                foreach (var b in zone.buildings_all)
+                {
+                    bool ok;
+                    try { ok = b != null && dict.Contains(b.id) && ReferenceEquals(dict[b.id], b); } catch { ok = false; }
+                    if (!ok) stale.Add(b);
+                }
+                foreach (var b in stale) { zone.buildings_all.Remove(b); purged++; }
+            }
+            if (purged > 0) ModLog.Info($"[sync] removed {purged} destroyed building(s) still listed in zones");
+            return purged;
+        }
+
+        /// <summary>Followers never run unit AI; the task/action state their units carry comes
+        /// from the king's world and doesn't match locally. On the first full simulation tick
+        /// every unit's AI threw (action index out of range), aborting the actor update, so the
+        /// promoted world stood still. Start every unit's AI fresh.</summary>
+        private static void ResetActorAi()
+        {
+            var units = World.world?.units?.getSimpleList();
+            if (units == null) return;
+            int reset = 0;
+            foreach (var a in units)
+            {
+                if (a == null || !a.isAlive()) continue;
+                try { a.cancelAllBeh(); reset++; } catch { }
+            }
+            ModLog.Info($"[sync] reset AI of {reset} unit(s) for the full simulation");
+        }
+
+        /// <summary>Drop objects from a manager's destroy queue that it no longer holds. Followers
+        /// never run that queue (the passive sim skips it), and objects the king removed were
+        /// disposed while still queued; the first full tick then destroyed them again and threw
+        /// (null asset) every frame.</summary>
+        private static void PurgeDestroyQueue(object mgr) => PurgeStaleSet(mgr, "_to_destroy_objects");
+
+        /// <summary>Remove objects the manager no longer holds from one of its object sets.</summary>
+        private static void PurgeStaleSet(object mgr, string field)
+        {
+            if (mgr == null) return;
+            var t = mgr.GetType();
+            var queue = AccessTools.Field(t, field)?.GetValue(mgr);
+            var dict = AccessTools.Field(t, "dict")?.GetValue(mgr) as System.Collections.IDictionary;
+            if (!(queue is System.Collections.IEnumerable items) || dict == null) return;
+            var remove = queue.GetType().GetMethod("Remove");
+            var stale = new List<object>();
+            foreach (var o in items)
+            {
+                bool ok;
+                try { ok = o is NanoObject n && dict.Contains(n.id) && ReferenceEquals(dict[n.id], o); } catch { ok = false; }
+                if (!ok) stale.Add(o);
+            }
+            foreach (var o in stale) remove?.Invoke(queue, new[] { o });
+            if (stale.Count > 0) ModLog.Info($"[sync] dropped {stale.Count} already removed object(s) from {t.Name}.{field}");
+        }
+
+        /// <summary>Projectiles in flight on a follower are visual copies (no owning kingdom);
+        /// the full simulation's hit check threw on each until it landed. Drop them.</summary>
+        private static void ClearVisualProjectiles()
+        {
+            var pm = World.world?.projectiles;
+            if (pm == null) return;
+            var all = new List<Projectile>();
+            foreach (var p in pm) all.Add(p);
+            var rem = AccessTools.Method(typeof(ProjectileManager), "removeObject", new[] { typeof(Projectile) });
+            foreach (var p in all) { try { rem?.Invoke(pm, new object[] { p }); } catch { } }
+        }
+
+        private static List<FieldInfo> _managerFields;
+
+        /// <summary>Move every map_stats id counter past the highest id its manager holds.</summary>
+        internal static int RaiseIdCounters()
+        {
+            // map_stats is public only in the publicized reference assembly: read it by reflection.
+            var w = World.world;
+            var stats = w != null ? AccessTools.Field(typeof(MapBox), "map_stats")?.GetValue(w) : null;
+            if (stats == null) return 0;
+            if (_managerFields == null)
+            {
+                _managerFields = new List<FieldInfo>();
+                foreach (var f in typeof(MapBox).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    if (typeof(BaseSystemManager).IsAssignableFrom(f.FieldType)) _managerFields.Add(f);
+            }
+            int raised = 0;
+            var seen = new HashSet<object>();
+            foreach (var f in _managerFields)
+            {
+                try
+                {
+                    var mgr = f.GetValue(w);
+                    if (mgr == null || !seen.Add(mgr)) continue;
+                    var type = AccessTools.Field(mgr.GetType(), "type_id")?.GetValue(mgr) as string;
+                    if (string.IsNullOrEmpty(type)) continue;
+                    var counter = AccessTools.Field(typeof(MapStats), type == "statuses" ? "id_status" : "id_" + type);
+                    if (counter == null || counter.FieldType != typeof(long)) continue;
+                    if (!(AccessTools.Field(mgr.GetType(), "dict")?.GetValue(mgr) is System.Collections.IDictionary dict)) continue;
+                    long max = 0;
+                    foreach (var k in dict.Keys) if (k is long id && id > max) max = id;
+                    long cur = (long)counter.GetValue(stats);
+                    if (cur <= max) { counter.SetValue(stats, max + 1); raised++; ModLog.Info($"[sync] id counter {type}: {cur} -> {max + 1}"); }
+                }
+                catch { }
+            }
+            return raised;
+        }
+
         public void Pump(float dt)
         {
+            CheckLeftFollower();
             if (Active && IsFollower)
             {
                 // In a room but no world yet and nothing arriving: ask the owner again.
@@ -1976,6 +2172,7 @@ namespace WorldboxMP.Client.Mirror
                 else _noWorldTimer = 0f;
                 try { PumpSnapshotLoad(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("PumpSnapshotLoad: " + e.Message); } }
                 if (_snapshotLoading) return;
+                try { RetryPendingStatuses(); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("RetryPendingStatuses: " + e.Message); } }
                 try { RelinkActorsFromData(dt); } catch (Exception e) { if (_pumpErr < 5) { _pumpErr++; ModLog.Warn("RelinkActorsFromData: " + e.Message); } }
                 return;
             }
@@ -2486,12 +2683,43 @@ namespace WorldboxMP.Client.Mirror
             var mark = new LiteNetLib.Utils.NetDataWriter();
             mark.Put(transferId); mark.Put(targetId4 ?? "");
             Send(MirrorKind.SnapshotMark, mark.CopyData());
+            SendLiveStatuses();
             _outgoingSnapshots.Add(new OutgoingSnapshot
             {
                 TargetId4 = targetId4, TransferId = transferId, Epoch = _epoch,
                 Data = data, Count = count
             });
             ModLog.Info($"Snapshot transfer queued: {data.Length} bytes / {count} chunks -> {(targetId4.Length == 0 ? "ALL" : targetId4)} (epoch {_epoch}).");
+        }
+
+        /// <summary>King: every unit's running statuses with their remaining time. The save
+        /// carries no statuses, so a joiner only saw those added after it joined (sleeping,
+        /// burning, pregnant...). Sent right after the cut-over marker, so the joiner applies
+        /// them on top of the loaded world; followers already in the room just get their
+        /// timers corrected.</summary>
+        private void SendLiveStatuses()
+        {
+            var units = World.world?.units?.getSimpleList();
+            if (units == null) return;
+            int sent = 0;
+            foreach (var a in units)
+            {
+                if (a == null || !a.isAlive()) continue;
+                try
+                {
+                    foreach (var kv in a.getStatusesDict())
+                    {
+                        var st = kv.Value;
+                        if (st == null || st.is_finished) continue;
+                        float left = (float)st.getRemainingTime();
+                        if (left <= 0f) continue;
+                        Send(MirrorKind.Status, MirrorCodec.Write(new StatusMsg { Id = a.id, StatusId = kv.Key, Timer = left, Add = true }));
+                        sent++;
+                    }
+                }
+                catch { }
+            }
+            if (sent > 0) ModLog.Info($"[sync] sent {sent} running status(es) after the snapshot mark");
         }
 
         /// <summary>King: submit a couple of chunks per frame (LiteNetLib paces the wire;
