@@ -137,7 +137,11 @@ namespace WorldboxMP.Client.UI
 
         private void OnRemoteCursor(CursorUpdate c)
         {
-            if (c.Id4 == NetClient.Instance.Id4) return;
+            var net = NetClient.Instance;
+            if (c.Id4 == net.Id4) return;
+            // Only players in our room's roster. A cursor still in flight when we leave would
+            // otherwise create a nameless hand that no roster change ever prunes.
+            if (!net.InRoom || !InRoster(c.Id4)) return;
             if (!_cursors.TryGetValue(c.Id4, out var v))
             {
                 v = CreateVisual(c.Id4);
@@ -199,6 +203,15 @@ namespace WorldboxMP.Client.UI
                 else if (kv.Value.Label != null) kv.Value.Label.text = NameOf(kv.Key);
             }
             foreach (var id in stale) _cursors.Remove(id);
+        }
+
+        private static bool InRoster(string id4)
+        {
+            var roster = NetClient.Instance?.Roster;
+            if (roster != null)
+                foreach (var p in roster)
+                    if (p.Id4 == id4) return true;
+            return false;
         }
 
         private static string NameOf(string id4)
