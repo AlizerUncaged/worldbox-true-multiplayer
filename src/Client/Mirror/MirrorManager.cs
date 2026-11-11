@@ -1396,7 +1396,7 @@ namespace WorldboxMP.Client.Mirror
         }
 
         /// <summary>Every second on followers: every actor's live culture/religion/language/clan/
-        /// family/army/city must match the ids in its own data (spawn snapshots and membership
+        /// family/army/kingdom must match the ids in its own data (spawn snapshots and membership
         /// messages write those ids even when the target wasn't there yet).</summary>
         private float _relinkTimer;
         // ── Dangling links ─────────────────────────────────────────────────
@@ -1470,6 +1470,9 @@ namespace WorldboxMP.Client.Mirror
                         if (d.clan > 0 && (a.clan == null || a.clan.id != d.clan)) { var x = w.clans.get(d.clan); if (x != null) a.setClan(x); }
                         if (d.family > 0 && (a.family == null || a.family.id != d.family)) { var x = w.families.get(d.family); if (x != null) a.setFamily(x); }
                         if (d.army > 0 && (a.army == null || a.army.id != d.army)) { var x = w.armies.get(d.army); if (x != null) a.setArmy(x); }
+                        // Kingdom too: when a city changes kingdom (rebellion, conquest), a member
+                        // the city switch missed kept its old kingdom here for good.
+                        if (d.civ_kingdom_id > 0 && (a.kingdom == null || a.kingdom.id != d.civ_kingdom_id)) { var x = w.kingdoms.get(d.civ_kingdom_id); if (x != null && !x.wild) a.setKingdom(x); }
                     }
                     catch (Exception e) { if (_relinkErr < 5) { _relinkErr++; ModLog.Warn("relink actor: " + e.Message); } }
                 }

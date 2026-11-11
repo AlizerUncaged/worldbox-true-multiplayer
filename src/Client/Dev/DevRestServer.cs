@@ -216,7 +216,9 @@ namespace WorldboxMP.Client.Dev
                         foreach (var u in World.world.units.getSimpleList())
                             if (u != null && u.id == want)
                             {
-                                try { u.prepareForSave(); } catch { }
+                                // ?save=1 refreshes the data from the live actor first. Off by default:
+                                // on a follower that would overwrite the synced data with stale links.
+                                if (Get(q, "save", "0") == "1") try { u.prepareForSave(); } catch { }
                                 var d = AccessTools.Field(typeof(Actor), "data")?.GetValue(u);
                                 return Newtonsoft.Json.JsonConvert.SerializeObject(d, JsonHelper.read_settings);
                             }
