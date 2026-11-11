@@ -209,6 +209,35 @@ namespace WorldboxMP.Client.Dev
                     }
                     if (Get(q, "msg", "") != "") WorldboxMP.Client.Api.WbmpApi.Send("wbmp.devtest", System.Text.Encoding.UTF8.GetBytes(Get(q, "msg", "")));
                     lock (_pluginLog) return "[\"" + string.Join("\",\"", _pluginLog.Select(Esc)) + "\"]";
+                case "statuses":
+                    // Live (unfinished) actor statuses by id, plus finished ones still held.
+                    try
+                    {
+                        string only = Get(q, "id", "");
+                        if (only.Length > 0)
+                        {
+                            // ?id=<status>: the ids of units that have it running.
+                            var ids = new List<string>();
+                            foreach (var u in World.world.units.getSimpleList())
+                                if (u != null && u.isAlive() && u.getStatusesDict().TryGetValue(only, out var st) && !st.is_finished) ids.Add(u.id.ToString());
+                            return "[" + string.Join(",", ids) + "]";
+                        }
+                        var live = new SortedDictionary<string, int>(); int finished = 0;
+                        foreach (var u in World.world.units.getSimpleList())
+                        {
+                            if (u == null || !u.isAlive()) continue;
+                            foreach (var kv in u.getStatusesDict())
+                            {
+                                if (kv.Value.is_finished) { finished++; continue; }
+                                live.TryGetValue(kv.Key, out var n); live[kv.Key] = n + 1;
+                            }
+                        }
+                        var sb = new StringBuilder("{\"finishedHeld\":" + finished + ",\"live\":{");
+                        bool first = true;
+                        foreach (var kv in live) { if (!first) sb.Append(','); first = false; sb.Append("\"" + Esc(kv.Key) + "\":" + kv.Value); }
+                        return sb.Append("}}").ToString();
+                    }
+                    catch (Exception e) { return "{\"error\":\"" + Esc(e.Message) + "\"}"; }
                 case "actorjson":
                     try
                     {
