@@ -88,6 +88,12 @@ namespace WorldboxMP.Client.UI
             var net = NetClient.Instance;
             var cam = Camera.main;
 
+            // Hands point at the world: hide them while a game window covers it, instead of
+            // drawing them on top of the window's buttons and text.
+            bool windowOpen = false;
+            try { windowOpen = ScrollWindow.isWindowActive(); } catch { }
+            if (_canvas.enabled == windowOpen) _canvas.enabled = !windowOpen;
+
             // Reposition every remote cursor: smooth world pos → screen point.
             float t = 1f - Mathf.Exp(-Time.unscaledDeltaTime * 14f);
             foreach (var v in _cursors.Values)
